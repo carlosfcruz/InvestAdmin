@@ -7,6 +7,9 @@ backend/.dev-seed-password
 # Local assistant/planning artifacts
 .agents/
 brain/
+docs/
+README.md
+frontend/README.md
 
 # Dependencies and build output
 **/node_modules/
