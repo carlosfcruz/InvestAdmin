@@ -7,9 +7,17 @@ on:
       - "frontend/**"
       - ".github/workflows/deploy-frontend.yml"
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   deploy-frontend:
     runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || secrets.AWS_REGION }}
+      AWS_FRONTEND_BUCKET: ${{ vars.AWS_FRONTEND_BUCKET || secrets.AWS_FRONTEND_BUCKET }}
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
     defaults:
       run:
         working-directory: frontend
@@ -31,16 +39,28 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Validate deploy configuration
+        shell: bash
+        run: |
+          missing=()
+          [[ -n "$AWS_REGION" ]] || missing+=("AWS_REGION")
+          [[ -n "$AWS_FRONTEND_BUCKET" ]] || missing+=("AWS_FRONTEND_BUCKET")
+          [[ -n "$AWS_DEPLOY_ROLE_ARN" ]] || missing+=("AWS_DEPLOY_ROLE_ARN")
+
+          if (( ${#missing[@]} > 0 )); then
+            echo "Missing GitHub repository variables/secrets: ${missing[*]}" >&2
+            exit 1
+          fi
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: github-actions-frontend-deploy
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Sync files to S3
         run: |
           aws s3 sync dist s3://$S3_BUCKET_NAME --delete
         env:
-          S3_BUCKET_NAME: ${{ secrets.AWS_FRONTEND_BUCKET }}
-
+          S3_BUCKET_NAME: ${{ env.AWS_FRONTEND_BUCKET }}
