@@ -9,7 +9,7 @@ import { useInvestmentOpportunities } from '../hooks/useInvestmentOpportunities'
 import { usePortfolioSummary } from '../hooks/usePortfolioSummary';
 import { useIndexes } from '../hooks/useIndexes';
 import { useTheme } from '../contexts/ThemeContext';
-import { SunIcon, MoonIcon, PieChart, LogOut, Activity, AlertCircle, ChevronRight, X, ArrowUp, ArrowDown, Pencil, Info, Bell, ChevronLeft } from 'lucide-react';
+import { SunIcon, MoonIcon, PieChart, LogOut, Activity, AlertCircle, ChevronRight, X, ArrowUp, ArrowDown, Pencil, Info, Bell, ChevronLeft, GripVertical } from 'lucide-react';
 import { api } from '../services/api';
 import { AppShell } from '../components/AppShell';
 import { Loader } from '../components/Loader';
@@ -177,18 +177,23 @@ export function Dashboard() {
     const [showRedeemedHistory, setShowRedeemedHistory] = useState(false);
     const [redeemingIds, setRedeemingIds] = useState<string[]>([]);
     const [redemptionError, setRedemptionError] = useState<string | null>(null);
+    const [groupOrder, setGroupOrder] = useState<string[]>([]);
+    const [draggedGroupKey, setDraggedGroupKey] = useState<string | null>(null);
+    const [dragOverGroupKey, setDragOverGroupKey] = useState<string | null>(null);
+    const [dragOverPosition, setDragOverPosition] = useState<'before' | 'after'>('before');
     const ITEMS_PER_PAGE = 5;
     const SECONDARY_TABLE_ITEMS_PER_PAGE = 5;
     const [pendingRedemptionsPage, setPendingRedemptionsPage] = useState(1);
     const [redeemedHistoryPage, setRedeemedHistoryPage] = useState(1);
     const summaryCardTitleClass = 'text-sm font-medium text-gray-500 dark:text-gray-400';
-    const summaryPrimaryValueClass = 'mt-2 text-3xl font-bold';
+    const summaryPrimaryValueClass = 'mt-2 max-w-full text-[clamp(1.45rem,1.05rem+0.95vw,2.15rem)] font-bold leading-[1.08] tracking-tight tabular-nums [overflow-wrap:anywhere]';
     const summaryMetaLabelClass = 'text-xs font-semibold text-gray-500 dark:text-gray-400';
-    const summaryMetaValueClass = 'mt-1 text-base font-semibold text-gray-700 dark:text-gray-300';
+    const summaryMetaValueClass = 'mt-1 max-w-full text-[clamp(0.95rem,0.88rem+0.2vw,1.05rem)] font-semibold leading-[1.18] tabular-nums text-gray-700 dark:text-gray-300 [overflow-wrap:anywhere]';
     const sectionTitleClass = 'text-xl font-bold text-gray-800 dark:text-gray-100';
     const sectionDescriptionClass = 'text-xs text-gray-500 dark:text-gray-400 mt-1';
     const sectionStatLabelClass = 'text-[10px] text-gray-400 font-bold tracking-tight';
     const sectionStatValueClass = 'font-bold text-gray-800 dark:text-gray-200';
+    const custodyOrderStorageKey = user?.id ? `investadmin.dashboard.custody-order:${user.id}` : null;
 
     const pushToast = (tone: ToastTone, title: string, description?: string) => {
         const toastId = toastIdRef.current + 1;
@@ -406,6 +411,43 @@ export function Dashboard() {
     };
 
     const formatPercentValue = (value: number) => `${(value * 100).toFixed(2)}%`;
+
+    const getComparisonBenchmarkName = (investment?: Investment | null) => investment?.benchmarkLabel || 'Benchmark';
+
+    const getComparatorDescription = (investment?: Investment | null) => {
+        const comparatorLabel = normalizeBenchmarkComparatorLabel(investment?.benchmarkComparatorLabel);
+
+        if (comparatorLabel === 'Equivalente Líquido') {
+            return 'A comparação ajusta o CDI para uma base líquida equivalente, usada para tornar justa a leitura de produtos isentos de IR como LCI e LCA.';
+        }
+
+        if (comparatorLabel === 'Curva Contratada') {
+            return 'A comparação considera a curva esperada do produto no período, usando a referência contratada para mostrar se o investimento ficou acima ou abaixo do esperado.';
+        }
+
+        return 'A comparação usa o índice de referência do investimento, como CDI ou SELIC, para mostrar se o retorno do período ficou acima ou abaixo dessa base.';
+    };
+
+    const getRelativeComparisonLabel = (benchmarkName: string, excessReturnPct: number) => {
+        if (Math.abs(excessReturnPct) < 0.00005) {
+            return `Em linha com ${benchmarkName}`;
+        }
+
+        return excessReturnPct >= 0 ? `Acima do ${benchmarkName}` : `Abaixo do ${benchmarkName}`;
+    };
+
+    const getComparisonSummarySentence = (
+        investment: Investment,
+        summary: EvolutionPeriodSummary,
+    ) => {
+        const benchmarkName = getComparisonBenchmarkName(investment);
+        const relativeLabel = getRelativeComparisonLabel(benchmarkName, summary.excessReturnPct || 0)
+            .replace(/^Acima/, 'acima')
+            .replace(/^Abaixo/, 'abaixo')
+            .replace(/^Em linha/, 'em linha');
+
+        return `Desde ${formatDatePtBr(summary.startDate)}, este investimento rendeu ${formatPercentValue(summary.portfolioReturnPct)} e ficou ${formatPercentagePoints(summary.excessReturnPct || 0)} ${relativeLabel}.`;
+    };
 
     const formatDatePtBr = (value?: string | null) => {
         if (!value) return '--';
@@ -834,6 +876,64 @@ export function Dashboard() {
         return groups;
     }, [filteredInvestments, sortColumn, sortDirection, totalCurrentValue]);
 
+    const allCustodyGroupKeys = useMemo<string[]>(() => {
+        return Array.from(new Set(activePortfolioInvestments.map((investment) => getDisplayGroupKey(investment.type))));
+    }, [activePortfolioInvestments]);
+
+    const orderedGroupedInvestments = useMemo(() => {
+        const visibleGroupKeys = Object.keys(groupedInvestments);
+        const orderedVisibleKeys = groupOrder.filter((groupKey) => visibleGroupKeys.includes(groupKey));
+        const missingVisibleKeys = visibleGroupKeys.filter((groupKey) => !orderedVisibleKeys.includes(groupKey));
+
+        return [...orderedVisibleKeys, ...missingVisibleKeys].map((groupKey) => [groupKey, groupedInvestments[groupKey]] as const);
+    }, [groupOrder, groupedInvestments]);
+
+    useEffect(() => {
+        if (allCustodyGroupKeys.length === 0) {
+            setGroupOrder((current) => (current.length === 0 ? current : []));
+            return;
+        }
+
+        let savedOrder: string[] = [];
+
+        if (custodyOrderStorageKey) {
+            try {
+                const rawValue = window.localStorage.getItem(custodyOrderStorageKey);
+                const parsedValue = rawValue ? JSON.parse(rawValue) : [];
+                if (Array.isArray(parsedValue)) {
+                    savedOrder = parsedValue.filter((value): value is string => typeof value === 'string');
+                }
+            } catch (error) {
+                console.error('Failed to restore custody order', error);
+            }
+        }
+
+        setGroupOrder((current) => {
+            const baseOrder = current.length > 0 ? current : savedOrder;
+            const normalizedOrder = baseOrder.filter((groupKey) => allCustodyGroupKeys.includes(groupKey));
+            const missingGroupKeys = allCustodyGroupKeys.filter((groupKey) => !normalizedOrder.includes(groupKey));
+            const nextOrder = [...normalizedOrder, ...missingGroupKeys];
+
+            if (current.length === nextOrder.length && current.every((groupKey, index) => groupKey === nextOrder[index])) {
+                return current;
+            }
+
+            return nextOrder;
+        });
+    }, [allCustodyGroupKeys, custodyOrderStorageKey]);
+
+    useEffect(() => {
+        if (!custodyOrderStorageKey || groupOrder.length === 0) {
+            return;
+        }
+
+        try {
+            window.localStorage.setItem(custodyOrderStorageKey, JSON.stringify(groupOrder));
+        } catch (error) {
+            console.error('Failed to persist custody order', error);
+        }
+    }, [custodyOrderStorageKey, groupOrder]);
+
     useEffect(() => {
         setGroupPagination((current) => {
             const next: Record<string, number> = {};
@@ -849,6 +949,71 @@ export function Dashboard() {
 
     const toggleGroup = (type: string) => {
         setExpandedGroups(prev => ({ ...prev, [type]: !(prev[type] ?? true) }));
+    };
+
+    const resetGroupDragState = () => {
+        setDraggedGroupKey(null);
+        setDragOverGroupKey(null);
+        setDragOverPosition('before');
+    };
+
+    const reorderCustodyGroups = (sourceGroupKey: string, targetGroupKey: string, position: 'before' | 'after') => {
+        if (sourceGroupKey === targetGroupKey) {
+            return;
+        }
+
+        setGroupOrder((current) => {
+            const baseOrder = current.length > 0 ? current : allCustodyGroupKeys;
+            const sourceIndex = baseOrder.indexOf(sourceGroupKey);
+            const targetIndex = baseOrder.indexOf(targetGroupKey);
+
+            if (sourceIndex === -1 || targetIndex === -1) {
+                return current;
+            }
+
+            const nextOrder = baseOrder.filter((groupKey) => groupKey !== sourceGroupKey);
+            const insertionIndex = nextOrder.indexOf(targetGroupKey) + (position === 'after' ? 1 : 0);
+            nextOrder.splice(insertionIndex, 0, sourceGroupKey);
+
+            return nextOrder;
+        });
+    };
+
+    const handleGroupDragStart = (event: any, groupKey: string) => {
+        event.stopPropagation();
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', groupKey);
+        setDraggedGroupKey(groupKey);
+        setDragOverGroupKey(groupKey);
+    };
+
+    const handleGroupDragOver = (event: any, groupKey: string) => {
+        if (!draggedGroupKey || draggedGroupKey === groupKey) {
+            return;
+        }
+
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const nextPosition = event.clientY >= bounds.top + (bounds.height / 2) ? 'after' : 'before';
+
+        if (dragOverGroupKey !== groupKey || dragOverPosition !== nextPosition) {
+            setDragOverGroupKey(groupKey);
+            setDragOverPosition(nextPosition);
+        }
+    };
+
+    const handleGroupDrop = (event: any, groupKey: string) => {
+        event.preventDefault();
+
+        const sourceGroupKey = draggedGroupKey || event.dataTransfer.getData('text/plain');
+
+        if (sourceGroupKey && sourceGroupKey !== groupKey) {
+            reorderCustodyGroups(sourceGroupKey, groupKey, dragOverPosition);
+        }
+
+        resetGroupDragState();
     };
 
     const toggleSort = (column: SortColumn) => {
@@ -1346,19 +1511,19 @@ export function Dashboard() {
                             {fixedIncomeBenchmark?.hasData ? (
                                 <>
                                     <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                        <div>
+                                        <div className="min-w-0">
                                             <p className={summaryMetaLabelClass}>Carteira RF</p>
                                             <p className={summaryMetaValueClass}>
                                                 {(fixedIncomeBenchmark.portfolioReturnPct * 100).toFixed(2)}%
                                             </p>
                                         </div>
-                                        <div>
+                                        <div className="min-w-0">
                                             <p className={summaryMetaLabelClass}>CDI</p>
                                             <p className={summaryMetaValueClass}>
                                                 {(fixedIncomeBenchmark.benchmarkReturnPct * 100).toFixed(2)}%
                                             </p>
                                         </div>
-                                        <div>
+                                        <div className="min-w-0">
                                             <div className="flex items-center gap-2">
                                                 <p className={summaryMetaLabelClass}>Base Analisada</p>
                                                 <InfoPopover
@@ -1445,14 +1610,23 @@ export function Dashboard() {
                         </div>
 
                         <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-                            <div className="rounded-xl border border-gray-100 dark:border-gray-800 bg-white/50 dark:bg-gray-900/40 p-4">
-                                <p className={summaryMetaLabelClass}>Posições Ativas</p>
+                            <div className="min-w-0 rounded-xl border border-gray-100 dark:border-gray-800 bg-white/50 dark:bg-gray-900/40 p-4">
+                                <div className="flex items-center gap-2">
+                                    <p className={summaryMetaLabelClass}>Posições Ativas</p>
+                                    <InfoPopover
+                                        tooltipId="summary-active-positions"
+                                        title="Posições Ativas"
+                                        description="Valor bruto atualmente investido na carteira operacional, considerando apenas ativos ainda em custódia."
+                                        activeTooltip={activeTooltip}
+                                        onToggle={setActiveTooltip}
+                                    />
+                                </div>
                                 <p className={`${summaryMetaValueClass} mt-2`}>{formatCurrency(displayActiveCurrentValue)}</p>
                                 <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
                                     {activePortfolioInvestments.length} {activePortfolioInvestments.length === 1 ? 'ativo em carteira' : 'ativos em carteira'}
                                 </p>
                             </div>
-                            <div className="rounded-xl border border-amber-100 dark:border-amber-900/40 bg-amber-50/70 dark:bg-amber-900/10 p-4">
+                            <div className="min-w-0 rounded-xl border border-amber-100 dark:border-amber-900/40 bg-amber-50/70 dark:bg-amber-900/10 p-4">
                                 <div className="flex items-center gap-2">
                                     <p className={summaryMetaLabelClass}>Em Liquidação</p>
                                     <InfoPopover
@@ -1468,7 +1642,7 @@ export function Dashboard() {
                                     {pendingRedemptionInvestments.length} {pendingRedemptionInvestments.length === 1 ? 'resgate pendente' : 'resgates pendentes'}
                                 </p>
                             </div>
-                            <div className="rounded-xl border border-blue-100 dark:border-blue-900/40 bg-blue-50/70 dark:bg-blue-900/10 p-4">
+                            <div className="min-w-0 rounded-xl border border-blue-100 dark:border-blue-900/40 bg-blue-50/70 dark:bg-blue-900/10 p-4">
                                 <div className="flex items-center gap-2">
                                     <p className={summaryMetaLabelClass}>Caixa Disponível</p>
                                     <InfoPopover
@@ -1484,9 +1658,18 @@ export function Dashboard() {
                                     {redeemedHistoryInvestments.length} {redeemedHistoryInvestments.length === 1 ? 'resgate disponível' : 'resgates disponíveis'}
                                 </p>
                             </div>
-                            <div className="rounded-xl border border-green-100 dark:border-green-900/40 bg-green-50/70 dark:bg-green-900/10 p-4">
-                                <p className={summaryMetaLabelClass}>Resultado Realizado</p>
-                                <p className={`mt-3 text-base font-semibold ${getSignedClass(totalRedeemedHistoryResult, 'text-green-700 dark:text-green-300', 'text-red-600 dark:text-red-400', 'text-gray-700 dark:text-gray-200')}`}>
+                            <div className="min-w-0 rounded-xl border border-green-100 dark:border-green-900/40 bg-green-50/70 dark:bg-green-900/10 p-4">
+                                <div className="flex items-center gap-2">
+                                    <p className={summaryMetaLabelClass}>Resultado Realizado</p>
+                                    <InfoPopover
+                                        tooltipId="summary-realized-result"
+                                        title="Resultado Realizado"
+                                        description="Lucro ou prejuízo já consolidado dos ativos marcados como resgatados e enviados para o histórico operacional."
+                                        activeTooltip={activeTooltip}
+                                        onToggle={setActiveTooltip}
+                                    />
+                                </div>
+                                <p className={`${summaryMetaValueClass} mt-2 ${getSignedClass(totalRedeemedHistoryResult, 'text-green-700 dark:text-green-300', 'text-red-600 dark:text-red-400', 'text-gray-700 dark:text-gray-200')}`}>
                                     {formatCurrency(totalRedeemedHistoryResult)}
                                 </p>
                                 <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
@@ -1856,7 +2039,7 @@ export function Dashboard() {
                             <div className="card p-16 flex justify-center items-center">
                                 <Loader size="lg" text="Mapeando ativos..." />
                             </div>
-                        ) : Object.keys(groupedInvestments).length === 0 ? (
+                        ) : orderedGroupedInvestments.length === 0 ? (
                             <div className="card p-12 text-center">
                                 <p className="text-gray-500 dark:text-gray-400 mb-4">
                                     {activePortfolioInvestments.length === 0
@@ -1870,7 +2053,7 @@ export function Dashboard() {
                                 )}
                             </div>
                         ) : (
-                            Object.entries(groupedInvestments).map(([type, items]) => {
+                            orderedGroupedInvestments.map(([type, items]) => {
                                 const metrics = getGroupMetrics(items);
                                 const isExpanded = expandedGroups[type] ?? true;
                                 const totalPages = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
@@ -1884,15 +2067,80 @@ export function Dashboard() {
                                     { length: pageWindowEnd - pageWindowStart + 1 },
                                     (_, index) => pageWindowStart + index
                                 );
+                                const isDraggedGroup = draggedGroupKey === type;
+                                const isAnyGroupDragging = draggedGroupKey !== null;
+                                const isDropTarget = dragOverGroupKey === type && isAnyGroupDragging && draggedGroupKey !== type;
+                                const dropHintLabel = dragOverPosition === 'before' ? 'Inserir acima' : 'Inserir abaixo';
 
                                 return (
-                                    <div key={type} className="card overflow-hidden transition-all duration-300">
+                                    <div
+                                        key={type}
+                                        onDragOver={(event) => handleGroupDragOver(event, type)}
+                                        onDrop={(event) => handleGroupDrop(event, type)}
+                                        onDragEnd={resetGroupDragState}
+                                        className={`card group relative overflow-hidden border border-transparent transition-[transform,opacity,box-shadow,border-color,background-color] duration-300 ${
+                                            isDraggedGroup
+                                                ? 'scale-[0.985] opacity-55 shadow-none ring-1 ring-blue-300/30'
+                                                : ''
+                                        } ${
+                                            isDropTarget
+                                                ? 'border-blue-300/70 ring-2 ring-blue-400/80 bg-blue-500/[0.03] shadow-[0_0_0_1px_rgba(96,165,250,0.28),0_24px_48px_-28px_rgba(59,130,246,0.78)]'
+                                                : ''
+                                        } ${
+                                            isAnyGroupDragging && !isDraggedGroup && !isDropTarget
+                                                ? 'opacity-90'
+                                                : ''
+                                        }`}
+                                    >
+                                        {isDropTarget && (
+                                            <>
+                                                <div
+                                                    className={`pointer-events-none absolute inset-x-4 z-0 h-16 rounded-2xl ${
+                                                        dragOverPosition === 'before'
+                                                            ? 'top-0 bg-gradient-to-b from-blue-500/[0.14] via-blue-500/[0.05] to-transparent'
+                                                            : 'bottom-0 bg-gradient-to-t from-blue-500/[0.14] via-blue-500/[0.05] to-transparent'
+                                                    }`}
+                                                />
+                                                <div
+                                                    className={`pointer-events-none absolute left-6 right-6 z-10 h-1.5 rounded-full bg-gradient-to-r from-blue-400 via-blue-500 to-indigo-500 shadow-[0_0_0_1px_rgba(96,165,250,0.45),0_0_18px_rgba(59,130,246,0.4)] ${
+                                                        dragOverPosition === 'before' ? 'top-2' : 'bottom-2'
+                                                    }`}
+                                                />
+                                                <div
+                                                    className={`pointer-events-none absolute left-6 z-10 flex items-center gap-2 ${
+                                                        dragOverPosition === 'before' ? 'top-2 -translate-y-1/2' : 'bottom-2 translate-y-1/2'
+                                                    }`}
+                                                >
+                                                    <span className="h-3.5 w-3.5 rounded-full border-2 border-white bg-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.35)] dark:border-gray-900" />
+                                                    <span className="rounded-full border border-blue-200 bg-white/95 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-blue-700 shadow-[0_10px_25px_-18px_rgba(59,130,246,0.7)] backdrop-blur dark:border-blue-900/50 dark:bg-gray-900/95 dark:text-blue-300">
+                                                        {dropHintLabel}
+                                                    </span>
+                                                </div>
+                                            </>
+                                        )}
+                                        {isAnyGroupDragging && !isDraggedGroup && (
+                                            <div
+                                                className={`pointer-events-none absolute inset-0 rounded-2xl transition-opacity duration-200 ${
+                                                    isDropTarget ? 'bg-blue-500/[0.05] opacity-100' : 'bg-transparent opacity-0'
+                                                }`}
+                                            />
+                                        )}
                                         <div
-                                            className="px-6 py-4 flex items-center justify-between cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-100 dark:border-gray-800"
+                                            className={`px-6 py-4 flex items-center justify-between cursor-pointer transition-colors bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-100 dark:border-gray-800 ${
+                                                isDropTarget
+                                                    ? 'bg-blue-50/70 dark:bg-blue-950/25'
+                                                    : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                                            }`}
                                             onClick={() => toggleGroup(type)}
                                         >
                                             <div className="flex items-center gap-4">
-                                                <div className="p-2 bg-white dark:bg-gray-800 rounded-lg shadow-sm">
+                                                <div className={`p-2 rounded-lg shadow-sm transition-all ${
+                                                    isDropTarget
+                                                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 shadow-[0_12px_24px_-20px_rgba(59,130,246,0.9)]'
+                                                        : isDraggedGroup
+                                                            ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300'
+                                                            : 'bg-white dark:bg-gray-800'
+                                                }`}>
                                                     <PieChart className="w-5 h-5 text-blue-600" />
                                                 </div>
                                                 <div>
@@ -1901,7 +2149,7 @@ export function Dashboard() {
                                                 </div>
                                             </div>
 
-                                            <div className="flex items-center gap-8">
+                                            <div className="flex items-center gap-4 md:gap-8">
                                                 <div className="hidden md:block text-right">
                                                     <p className={sectionStatLabelClass}>Total Alocado</p>
                                                     <p className={sectionStatValueClass}>{formatCurrency(metrics.current)}</p>
@@ -1912,6 +2160,28 @@ export function Dashboard() {
                                                         {metrics.allocation.toFixed(1)}%
                                                     </span>
                                                 </div>
+                                                <button
+                                                    type="button"
+                                                    draggable
+                                                    onClick={(event) => event.stopPropagation()}
+                                                    onDragStart={(event) => handleGroupDragStart(event, type)}
+                                                    onDragEnd={resetGroupDragState}
+                                                    aria-label={`Reordenar custódia ${displayGroupLabel}`}
+                                                    title="Arrastar para reordenar"
+                                                    className={`icon-action-button hidden h-10 w-10 md:inline-flex ${
+                                                        isDraggedGroup ? 'cursor-grabbing' : 'cursor-grab'
+                                                    } ${
+                                                        isDraggedGroup
+                                                            ? 'border border-blue-300 bg-blue-100 text-blue-700 shadow-[0_14px_24px_-18px_rgba(59,130,246,0.9)] dark:border-blue-800 dark:bg-blue-900/40 dark:text-blue-300'
+                                                            : isDropTarget
+                                                                ? 'border border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/30 dark:text-blue-300'
+                                                                : isAnyGroupDragging
+                                                                    ? 'border border-blue-100/70 bg-blue-50/60 text-blue-600 dark:border-blue-900/30 dark:bg-blue-950/20 dark:text-blue-300'
+                                                                    : ''
+                                                    }`}
+                                                >
+                                                    <GripVertical className="h-4 w-4" />
+                                                </button>
                                                 <div className={`transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`}>
                                                     <ChevronRight className="w-5 h-5 text-gray-400" />
                                                 </div>
@@ -2293,7 +2563,16 @@ export function Dashboard() {
                                 <span className="font-semibold">{formatCurrency(selectedInvestment.amountInvested)}</span>
                             </div>
                             <div className="flex justify-between border-b border-gray-100 dark:border-gray-800 pb-2">
-                                <span className="text-gray-600 dark:text-gray-400">Saldo Atual (Bruto)</span>
+                                <span className="flex items-center gap-1 text-gray-600 dark:text-gray-400">
+                                    Valor Atual Antes do IR
+                                    <InfoPopover
+                                        tooltipId="investment-current-gross"
+                                        title="Valor Atual Antes do IR"
+                                        description="Mostra quanto o investimento vale hoje antes de descontar imposto. Serve para enxergar o valor bruto da posição."
+                                        activeTooltip={activeTooltip}
+                                        onToggle={setActiveTooltip}
+                                    />
+                                </span>
                                 <span className="font-semibold text-blue-600 dark:text-blue-400">
                                     {formatCurrency(selectedInvestment.currentValue || selectedInvestment.amountInvested)}
                                 </span>
@@ -2320,7 +2599,16 @@ export function Dashboard() {
                                         </span>
                                     </div>
                                     <div className="flex justify-between pt-2">
-                                        <span className="font-bold text-gray-800 dark:text-gray-200">Saldo Líquido</span>
+                                        <span className="flex items-center gap-1 font-bold text-gray-800 dark:text-gray-200">
+                                            Valor Atual Líquido
+                                            <InfoPopover
+                                                tooltipId="investment-current-net"
+                                                title="Valor Atual Líquido"
+                                                description="Mostra quanto você receberia hoje depois do desconto de imposto, quando aplicável."
+                                                activeTooltip={activeTooltip}
+                                                onToggle={setActiveTooltip}
+                                            />
+                                        </span>
                                         <span className={`font-bold text-xl ${getSignedClass(((selectedInvestment as any).netValue || selectedInvestment.amountInvested) - selectedInvestment.amountInvested, 'text-green-600 dark:text-green-400', 'text-red-600 dark:text-red-400', 'text-blue-600 dark:text-blue-400')}`}>
                                             {formatCurrency((selectedInvestment as any).netValue || selectedInvestment.amountInvested)}
                                         </span>
@@ -2358,7 +2646,16 @@ export function Dashboard() {
                                                 </div>
                                                 {selectedInvestment.maturityDate && (
                                                     <div className="sm:col-span-2 bg-green-600/10 p-3 rounded-lg border border-green-200 dark:border-green-800/50">
-                                                        <div className="text-[10px] text-green-600 dark:text-green-400 font-bold">Resgate no Vencimento (Líquido)</div>
+                                                        <div className="flex items-center gap-1 text-[10px] text-green-600 dark:text-green-400 font-bold">
+                                                            Se Mantiver Até o Vencimento
+                                                            <InfoPopover
+                                                                tooltipId="investment-hold-to-maturity"
+                                                                title="Se Mantiver Até o Vencimento"
+                                                                description="Estimativa do valor líquido caso o investimento seja mantido até a data final, considerando a regra de imposto válida no vencimento."
+                                                                activeTooltip={activeTooltip}
+                                                                onToggle={setActiveTooltip}
+                                                            />
+                                                        </div>
                                                         <div className={`text-lg font-bold ${getSignedClass(((selectedInvestment as any).maturityNetValue || selectedInvestment.amountInvested) - selectedInvestment.amountInvested, 'text-green-700 dark:text-green-300', 'text-red-600 dark:text-red-400', 'text-blue-600 dark:text-blue-400')}`}>
                                                             {formatCurrency((selectedInvestment as any).maturityNetValue || selectedInvestment.amountInvested)}
                                                         </div>
@@ -2379,36 +2676,85 @@ export function Dashboard() {
                                 <div className="flex flex-col gap-3">
                                     <div className="flex items-center justify-between gap-3">
                                         <div>
-                                            <h4 className="text-xs font-bold text-violet-700 dark:text-violet-300">Comparação no Período</h4>
+                                            <div className="flex items-center gap-1">
+                                                <h4 className="text-xs font-bold text-violet-700 dark:text-violet-300">
+                                                    Seu Investimento vs {getComparisonBenchmarkName(selectedInvestment)}
+                                                </h4>
+                                                <InfoPopover
+                                                    tooltipId="investment-comparison-header"
+                                                    title={`Seu Investimento vs ${getComparisonBenchmarkName(selectedInvestment)}`}
+                                                    description="Compara o rendimento deste investimento com o índice de referência no mesmo período para mostrar se ele ficou acima ou abaixo da base usada pelo mercado."
+                                                    activeTooltip={activeTooltip}
+                                                    onToggle={setActiveTooltip}
+                                                />
+                                            </div>
                                             <p className="mt-1 text-[10px] text-violet-700/80 dark:text-violet-300/80">
                                                 {getChartPeriodLabel(selectedInvestmentComparisonSummary.period)}
                                             </p>
                                         </div>
                                         <div className="text-right">
-                                            <p className="text-[10px] uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                                                {normalizeBenchmarkComparatorLabel(selectedInvestment.benchmarkComparatorLabel)}
-                                            </p>
+                                            <div className="flex items-center justify-end gap-1">
+                                                <p className="text-[10px] font-semibold tracking-wide text-gray-500 dark:text-gray-400">
+                                                    Comparação justa: {normalizeBenchmarkComparatorLabel(selectedInvestment.benchmarkComparatorLabel)}
+                                                </p>
+                                                <InfoPopover
+                                                    tooltipId="investment-comparison-method"
+                                                    title={normalizeBenchmarkComparatorLabel(selectedInvestment.benchmarkComparatorLabel)}
+                                                    description={getComparatorDescription(selectedInvestment)}
+                                                    activeTooltip={activeTooltip}
+                                                    onToggle={setActiveTooltip}
+                                                    align="left"
+                                                />
+                                            </div>
                                             <p className="text-xs text-gray-500 dark:text-gray-400">
                                                 {formatDatePtBr(selectedInvestmentComparisonSummary.startDate)} até {formatDatePtBr(selectedInvestmentComparisonSummary.endDate)}
                                             </p>
                                         </div>
                                     </div>
 
+                                    <p className="rounded-lg bg-white/50 px-3 py-2 text-xs leading-relaxed text-violet-900/85 dark:bg-gray-800/40 dark:text-violet-100/90">
+                                        {getComparisonSummarySentence(selectedInvestment, selectedInvestmentComparisonSummary)}
+                                    </p>
+
                                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                         <div className="bg-white/60 dark:bg-gray-800/50 rounded-lg p-3">
-                                            <div className="text-[10px] text-gray-500 dark:text-gray-400">Carteira</div>
+                                            <div className="text-[10px] text-gray-500 dark:text-gray-400">Seu Investimento</div>
                                             <div className={`mt-1 text-lg font-bold ${getSignedClass(selectedInvestmentComparisonSummary.portfolioReturnPct)}`}>
                                                 {formatPercentValue(selectedInvestmentComparisonSummary.portfolioReturnPct)}
                                             </div>
                                         </div>
                                         <div className="bg-white/60 dark:bg-gray-800/50 rounded-lg p-3">
-                                            <div className="text-[10px] text-gray-500 dark:text-gray-400">{selectedInvestment.benchmarkLabel || 'Benchmark'}</div>
+                                            <div className="flex items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400">
+                                                {getComparisonBenchmarkName(selectedInvestment)}
+                                                <InfoPopover
+                                                    tooltipId="investment-comparison-benchmark"
+                                                    title={getComparisonBenchmarkName(selectedInvestment)}
+                                                    description={selectedInvestment.benchmarkLabel === 'CDI'
+                                                        ? 'Taxa de referência usada em muitos investimentos de renda fixa no Brasil.'
+                                                        : selectedInvestment.benchmarkLabel === 'SELIC'
+                                                            ? 'Taxa básica de juros da economia brasileira, usada como referência para investimentos pós-fixados ligados à SELIC.'
+                                                            : 'Índice de inflação usado como referência para investimentos atrelados ao IPCA.'}
+                                                    activeTooltip={activeTooltip}
+                                                    onToggle={setActiveTooltip}
+                                                    align="left"
+                                                />
+                                            </div>
                                             <div className={`mt-1 text-lg font-bold ${getSignedClass(selectedInvestmentComparisonSummary.benchmarkReturnPct || 0, 'text-blue-600 dark:text-blue-400', 'text-blue-600 dark:text-blue-400', 'text-blue-600 dark:text-blue-400')}`}>
                                                 {formatPercentValue(selectedInvestmentComparisonSummary.benchmarkReturnPct || 0)}
                                             </div>
                                         </div>
                                         <div className="bg-white/60 dark:bg-gray-800/50 rounded-lg p-3">
-                                            <div className="text-[10px] text-gray-500 dark:text-gray-400">Excesso</div>
+                                            <div className="flex items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400">
+                                                {getRelativeComparisonLabel(getComparisonBenchmarkName(selectedInvestment), selectedInvestmentComparisonSummary.excessReturnPct || 0)}
+                                                <InfoPopover
+                                                    tooltipId="investment-comparison-gap"
+                                                    title={getRelativeComparisonLabel(getComparisonBenchmarkName(selectedInvestment), selectedInvestmentComparisonSummary.excessReturnPct || 0)}
+                                                    description={`Diferença, em pontos percentuais, entre o rendimento do seu investimento e o ${getComparisonBenchmarkName(selectedInvestment)} no mesmo período.`}
+                                                    activeTooltip={activeTooltip}
+                                                    onToggle={setActiveTooltip}
+                                                    align="left"
+                                                />
+                                            </div>
                                             <div className={`mt-1 text-lg font-bold ${getSignedClass(selectedInvestmentComparisonSummary.excessReturnPct || 0)}`}>
                                                 {formatPercentagePoints(selectedInvestmentComparisonSummary.excessReturnPct || 0)}
                                             </div>
