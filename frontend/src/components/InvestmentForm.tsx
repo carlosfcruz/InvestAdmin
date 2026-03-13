@@ -1,15 +1,23 @@
-﻿import { useState, useEffect } from 'react';
+import { useEffect, useId, useState, type ChangeEvent, type FormEvent } from 'react';
 import { useInvestments } from '../hooks/useInvestments';
 import type { Investment } from '../hooks/useInvestments';
 import { CustomSelect } from './CustomSelect';
 import { Loader } from '../components/Loader';
 import { getDefaultIndexerForType, getModalityOptionsForType, getRateFieldConfig, isIndexerAllowedForType } from '../features/investments/productRules';
 
-export function InvestmentForm({ onSuccess, onCancel, initialData }: { onSuccess: () => void, onCancel: () => void, initialData?: Investment | null }) {
+interface InvestmentFormProps {
+    onSuccess: () => void;
+    onCancel: () => void;
+    initialData?: Investment | null;
+}
+
+export function InvestmentForm({ onSuccess, onCancel, initialData }: InvestmentFormProps) {
     const { addInvestment, updateInvestment } = useInvestments();
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const today = new Date().toISOString().split('T')[0] || '';
+    const formId = useId();
+    const helpTextId = `${formId}-help`;
 
     const [formData, setFormData] = useState({
         type: 'CDB',
@@ -27,39 +35,42 @@ export function InvestmentForm({ onSuccess, onCancel, initialData }: { onSuccess
     });
 
     useEffect(() => {
-        if (initialData) {
-            const sanitizedIndexer = initialData.type === 'FUNDO' || isIndexerAllowedForType(initialData.type, initialData.indexer)
-                ? initialData.indexer
-                : getDefaultIndexerForType(initialData.type);
-            setFormData({
-                type: initialData.type,
-                indexer: sanitizedIndexer,
-                issuer: initialData.issuer,
-                productName: initialData.productName,
-                rate: Number(initialData.rate).toLocaleString('pt-BR', { maximumFractionDigits: 2, useGrouping: false }),
-                applicationDate: initialData.applicationDate.split('T')[0],
-                maturityDate: initialData.maturityDate ? initialData.maturityDate.split('T')[0] : '',
-                amountInvested: Math.round(initialData.amountInvested * 100).toString(),
-                liquidity: initialData.liquidity || 'D+0',
-                cnpj: initialData.cnpj || '',
-                quantity: initialData.quantity?.toString() || '',
-                purchaseQuoteValue: initialData.purchaseQuoteValue?.toString() || '',
-            });
+        if (!initialData) {
+            return;
         }
+
+        const sanitizedIndexer = initialData.type === 'FUNDO' || isIndexerAllowedForType(initialData.type, initialData.indexer)
+            ? initialData.indexer
+            : getDefaultIndexerForType(initialData.type);
+
+        setFormData({
+            type: initialData.type,
+            indexer: sanitizedIndexer,
+            issuer: initialData.issuer,
+            productName: initialData.productName,
+            rate: Number(initialData.rate).toLocaleString('pt-BR', { maximumFractionDigits: 2, useGrouping: false }),
+            applicationDate: initialData.applicationDate.split('T')[0],
+            maturityDate: initialData.maturityDate ? initialData.maturityDate.split('T')[0] : '',
+            amountInvested: Math.round(initialData.amountInvested * 100).toString(),
+            liquidity: initialData.liquidity || 'D+0',
+            cnpj: initialData.cnpj || '',
+            quantity: initialData.quantity?.toString() || '',
+            purchaseQuoteValue: initialData.purchaseQuoteValue?.toString() || '',
+        });
     }, [initialData]);
 
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-        setFormData({ ...formData, [e.target.name]: e.target.value });
+    const handleChange = (event: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+        setFormData((current) => ({ ...current, [event.target.name]: event.target.value }));
     };
 
-    const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const rawValue = e.target.value.replace(/\D/g, '');
-        setFormData({ ...formData, amountInvested: rawValue });
+    const handleAmountChange = (event: ChangeEvent<HTMLInputElement>) => {
+        const rawValue = event.target.value.replace(/\D/g, '');
+        setFormData((current) => ({ ...current, amountInvested: rawValue }));
     };
 
-    const handleRateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const value = e.target.value.replace(/[^\d.,]/g, '');
-        setFormData({ ...formData, rate: value });
+    const handleRateChange = (event: ChangeEvent<HTMLInputElement>) => {
+        const sanitizedValue = event.target.value.replace(/[^\d.,]/g, '');
+        setFormData((current) => ({ ...current, rate: sanitizedValue }));
     };
 
     const displayAmount = formData.amountInvested
@@ -84,8 +95,8 @@ export function InvestmentForm({ onSuccess, onCancel, initialData }: { onSuccess
         }));
     };
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
+    const handleSubmit = async (event: FormEvent) => {
+        event.preventDefault();
         setLoading(true);
         setError('');
 
@@ -95,9 +106,9 @@ export function InvestmentForm({ onSuccess, onCancel, initialData }: { onSuccess
 
             let numAmount = 0;
             if (isFund) {
-                const qty = Number(formData.quantity);
+                const quantity = Number(formData.quantity);
                 const purchaseQuote = Number(formData.purchaseQuoteValue);
-                numAmount = qty * purchaseQuote;
+                numAmount = quantity * purchaseQuote;
             } else {
                 numAmount = Number(formData.amountInvested) / 100;
             }
@@ -149,14 +160,10 @@ export function InvestmentForm({ onSuccess, onCancel, initialData }: { onSuccess
                 }
             }
 
-            if (formData.maturityDate) {
-                const appStr = formData.applicationDate;
-                const matStr = formData.maturityDate;
-                if (matStr <= appStr) {
-                    setError('A data de vencimento deve ser posterior à data de aplicação.');
-                    setLoading(false);
-                    return;
-                }
+            if (formData.maturityDate && formData.maturityDate <= formData.applicationDate) {
+                setError('A data de vencimento deve ser posterior à data de aplicação.');
+                setLoading(false);
+                return;
             }
 
             const dataToSubmit = {
@@ -164,8 +171,8 @@ export function InvestmentForm({ onSuccess, onCancel, initialData }: { onSuccess
                 rate: numRate,
                 amountInvested: numAmount,
                 maturityDate: formData.maturityDate || null,
-                type: formData.type as any,
-                indexer: (isFund ? 'PREFIXADO' : formData.indexer) as any,
+                type: formData.type as Investment['type'],
+                indexer: (isFund ? 'PREFIXADO' : formData.indexer) as Investment['indexer'],
                 quantity: isFund ? Number(formData.quantity) : undefined,
                 purchaseQuoteValue: isFund ? Number(formData.purchaseQuoteValue) : undefined,
                 cnpj: isFund ? formData.cnpj : undefined,
@@ -176,6 +183,7 @@ export function InvestmentForm({ onSuccess, onCancel, initialData }: { onSuccess
             } else {
                 await addInvestment(dataToSubmit);
             }
+
             onSuccess();
         } catch (err: any) {
             setError(err.message);
@@ -184,14 +192,34 @@ export function InvestmentForm({ onSuccess, onCancel, initialData }: { onSuccess
         }
     };
 
+    const panelClassName = 'card border-gray-100 bg-white/90 p-6 dark:border-gray-700 dark:bg-gray-800/90';
+    const labelClassName = 'mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300';
+    const requiredMark = <span aria-hidden="true" className="ml-1 text-red-500">*</span>;
+
     return (
-        <div className="card p-6">
-            {error && <div className="mb-4 bg-red-50 text-red-500 p-3 rounded-md text-sm">{error}</div>}
+        <div className={panelClassName}>
+            <div className="mb-5 flex flex-col gap-2">
+                <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                    {initialData ? 'Atualize os dados do ativo' : 'Preencha os dados do novo ativo'}
+                </p>
+                <p id={helpTextId} className="text-xs text-gray-500 dark:text-gray-400">
+                    Campos marcados com * são obrigatórios. O vencimento é opcional e pode ser adicionado depois.
+                </p>
+            </div>
+
+            {error && (
+                <div role="alert" aria-live="polite" className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+                    {error}
+                </div>
+            )}
 
             <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <CustomSelect
+                        id={`${formId}-type`}
                         label="Tipo"
+                        required
+                        describedBy={helpTextId}
                         options={[
                             { value: 'CDB', label: 'CDB' },
                             { value: 'TESOURO', label: 'Tesouro Direto' },
@@ -205,35 +233,39 @@ export function InvestmentForm({ onSuccess, onCancel, initialData }: { onSuccess
 
                     {formData.type !== 'FUNDO' && (
                         <CustomSelect
+                            id={`${formId}-indexer`}
                             label="Modalidade"
+                            required
+                            describedBy={helpTextId}
                             options={modalityOptions}
                             value={formData.indexer}
-                            onChange={(val) => setFormData({ ...formData, indexer: val })}
+                            onChange={(nextValue) => setFormData((current) => ({ ...current, indexer: nextValue }))}
                         />
                     )}
 
                     {formData.type === 'FUNDO' && (
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">CNPJ do Fundo</label>
-                            <input type="text" name="cnpj" required value={formData.cnpj} onChange={handleChange} placeholder="00.000.000/0000-00" className="input-field" />
+                            <label htmlFor={`${formId}-cnpj`} className={labelClassName}>CNPJ do Fundo{requiredMark}</label>
+                            <input id={`${formId}-cnpj`} type="text" name="cnpj" required value={formData.cnpj} onChange={handleChange} placeholder="00.000.000/0000-00" className="input-field" />
                         </div>
                     )}
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Emissor</label>
-                        <input type="text" name="issuer" required value={formData.issuer} onChange={handleChange} placeholder="Ex: Banco Inter" className="input-field" />
+                        <label htmlFor={`${formId}-issuer`} className={labelClassName}>Emissor{requiredMark}</label>
+                        <input id={`${formId}-issuer`} type="text" name="issuer" required value={formData.issuer} onChange={handleChange} placeholder="Ex: Banco Inter" className="input-field" />
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Produto / Nome do Fundo</label>
-                        <input type="text" name="productName" required value={formData.productName} onChange={handleChange} placeholder="Ex: Alaska Black FIC FIA" className="input-field" />
+                        <label htmlFor={`${formId}-product-name`} className={labelClassName}>Produto / Nome do Fundo{requiredMark}</label>
+                        <input id={`${formId}-product-name`} type="text" name="productName" required value={formData.productName} onChange={handleChange} placeholder="Ex: Alaska Black FIC FIA" className="input-field" />
                     </div>
 
                     {formData.type !== 'FUNDO' ? (
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{rateFieldConfig.label}</label>
+                            <label htmlFor={`${formId}-rate`} className={labelClassName}>{rateFieldConfig.label}{requiredMark}</label>
                             <div className="relative">
                                 <input
+                                    id={`${formId}-rate`}
                                     type="text"
                                     required
                                     name="rate"
@@ -242,22 +274,23 @@ export function InvestmentForm({ onSuccess, onCancel, initialData }: { onSuccess
                                     placeholder={rateFieldConfig.placeholder}
                                     className="input-field pr-10"
                                 />
-                                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">%</span>
+                                <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-sm text-gray-400">%</span>
                             </div>
                         </div>
                     ) : (
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Cotas Adquiridas</label>
-                            <input type="number" step="any" name="quantity" required value={formData.quantity} onChange={handleChange} placeholder="0.000000" className="input-field" />
+                            <label htmlFor={`${formId}-quantity`} className={labelClassName}>Cotas Adquiridas{requiredMark}</label>
+                            <input id={`${formId}-quantity`} type="number" step="any" name="quantity" required value={formData.quantity} onChange={handleChange} placeholder="0.000000" className="input-field" />
                         </div>
                     )}
 
                     {formData.type !== 'FUNDO' ? (
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Valor Investido (R$)</label>
+                            <label htmlFor={`${formId}-amount-invested`} className={labelClassName}>Valor Investido (R$){requiredMark}</label>
                             <div className="relative">
-                                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">R$</span>
+                                <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm text-gray-400">R$</span>
                                 <input
+                                    id={`${formId}-amount-invested`}
                                     type="text"
                                     required
                                     name="amountInvested"
@@ -270,40 +303,40 @@ export function InvestmentForm({ onSuccess, onCancel, initialData }: { onSuccess
                         </div>
                     ) : (
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Valor da Cota na Compra</label>
-                            <input type="number" step="any" name="purchaseQuoteValue" required value={formData.purchaseQuoteValue} onChange={handleChange} placeholder="1.23456" className="input-field" />
+                            <label htmlFor={`${formId}-purchase-quote`} className={labelClassName}>Valor da Cota na Compra{requiredMark}</label>
+                            <input id={`${formId}-purchase-quote`} type="number" step="any" name="purchaseQuoteValue" required value={formData.purchaseQuoteValue} onChange={handleChange} placeholder="1.23456" className="input-field" />
                         </div>
                     )}
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Data de Aplicação</label>
-                        <input type="date" required name="applicationDate" value={formData.applicationDate} onChange={handleChange} max={today} className="input-field" />
+                        <label htmlFor={`${formId}-application-date`} className={labelClassName}>Data de Aplicação{requiredMark}</label>
+                        <input id={`${formId}-application-date`} type="date" required name="applicationDate" value={formData.applicationDate} onChange={handleChange} max={today} className="input-field" />
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Vencimento (Opcional)</label>
-                        <input type="date" name="maturityDate" value={formData.maturityDate} onChange={handleChange} className="input-field" />
+                        <label htmlFor={`${formId}-maturity-date`} className={labelClassName}>Vencimento (Opcional)</label>
+                        <input id={`${formId}-maturity-date`} type="date" name="maturityDate" value={formData.maturityDate} onChange={handleChange} className="input-field" />
                     </div>
                 </div>
 
-                <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-                    <button type="button" onClick={onCancel} className="btn-secondary">
-                        Cancelar
-                    </button>
-                    <button type="submit" disabled={loading} className={`btn-primary ${loading ? 'opacity-70 cursor-not-allowed' : ''}`}>
-                        {loading ? (
-                            <span className="flex items-center justify-center gap-2">
-                                <Loader size="sm" className="text-white dark:text-white" />
-                                Salvando...
-                            </span>
-                        ) : (
-                            'Salvar Investimento'
-                        )}
-                    </button>
+                <div className="sticky bottom-0 -mx-6 mt-6 border-t border-gray-200 bg-white/95 px-6 pt-4 backdrop-blur dark:border-gray-700 dark:bg-gray-800/95">
+                    <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                        <button type="button" onClick={onCancel} className="btn-secondary">
+                            Cancelar
+                        </button>
+                        <button type="submit" disabled={loading} className={`btn-primary ${loading ? 'cursor-not-allowed opacity-70' : ''}`}>
+                            {loading ? (
+                                <span className="flex items-center justify-center gap-2">
+                                    <Loader size="sm" className="text-white dark:text-white" />
+                                    Salvando...
+                                </span>
+                            ) : (
+                                'Salvar Investimento'
+                            )}
+                        </button>
+                    </div>
                 </div>
             </form>
         </div>
     );
 }
-
-

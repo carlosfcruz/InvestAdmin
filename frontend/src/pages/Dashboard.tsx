@@ -13,6 +13,7 @@ import { SunIcon, MoonIcon, PieChart, LogOut, Activity, AlertCircle, ChevronRigh
 import { api } from '../services/api';
 import { AppShell } from '../components/AppShell';
 import { Loader } from '../components/Loader';
+import { ToastStack, type ToastItem, type ToastTone } from '../components/ToastStack';
 import type { ChartPeriod, EvolutionPeriodSummary } from '../components/yieldEvolutionChartMetrics';
 import { getOpportunityHomeBadge, getOpportunitySeverityClasses } from '../features/opportunities/opportunityPresentation';
 
@@ -154,7 +155,12 @@ export function Dashboard() {
     const [selectedInvestmentPeriodSummary, setSelectedInvestmentPeriodSummary] = useState<EvolutionPeriodSummary | null>(null);
     const [investmentToDelete, setInvestmentToDelete] = useState<Investment | null>(null);
     const { theme, toggleTheme } = useTheme();
-    const modalRef = useRef<HTMLDivElement>(null);
+    const detailsModalRef = useRef<HTMLDivElement>(null);
+    const formModalRef = useRef<HTMLDivElement>(null);
+    const toastIdRef = useRef(0);
+    const [toasts, setToasts] = useState<ToastItem[]>([]);
+    const [deletingInvestmentId, setDeletingInvestmentId] = useState<string | null>(null);
+    const [isExportingHistory, setIsExportingHistory] = useState(false);
 
     // Discovery & Filter State
     const [searchTerm, setSearchTerm] = useState('');
@@ -183,6 +189,29 @@ export function Dashboard() {
     const sectionDescriptionClass = 'text-xs text-gray-500 dark:text-gray-400 mt-1';
     const sectionStatLabelClass = 'text-[10px] text-gray-400 font-bold tracking-tight';
     const sectionStatValueClass = 'font-bold text-gray-800 dark:text-gray-200';
+
+    const pushToast = (tone: ToastTone, title: string, description?: string) => {
+        const toastId = toastIdRef.current + 1;
+        toastIdRef.current = toastId;
+
+        setToasts((current) => [...current, { id: toastId, tone, title, description }]);
+    };
+
+    const dismissToast = (toastId: number) => {
+        setToasts((current) => current.filter((toast) => toast.id !== toastId));
+    };
+
+    useEffect(() => {
+        if (toasts.length === 0) {
+            return;
+        }
+
+        const timeout = window.setTimeout(() => {
+            setToasts((current) => current.slice(1));
+        }, 4200);
+
+        return () => window.clearTimeout(timeout);
+    }, [toasts]);
 
     const isRedeemedInvestment = (investment: Investment) => investment.portfolioStatus === 'REDEEMED';
 
@@ -620,6 +649,12 @@ export function Dashboard() {
             || (indexType === 'CDI' ? 'CDI Hoje' : indexType === 'IPCA' ? 'IPCA Anualizado' : 'SELIC');
     };
 
+    const getIndexUpdatedLabel = (indexType: 'CDI' | 'SELIC' | 'IPCA') => {
+        const displayItem = indexDisplay?.[indexType];
+        const fallbackDate = indexes?.[indexType]?.date;
+        return formatDatePtBr(displayItem?.sourceDate || displayItem?.date || fallbackDate);
+    };
+
     const getSignedClass = (
         value: number,
         positive = 'text-green-600 dark:text-green-400',
@@ -633,12 +668,13 @@ export function Dashboard() {
 
     // Focus Trap Logic
     useEffect(() => {
-        if (!selectedInvestment) return;
+        const activeModal = selectedInvestment ? detailsModalRef.current : showForm ? formModalRef.current : null;
+        if (!activeModal) return;
 
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key !== 'Tab') return;
 
-            const focusableElements = modalRef.current?.querySelectorAll(
+            const focusableElements = activeModal.querySelectorAll(
                 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
             );
             if (!focusableElements || focusableElements.length === 0) return;
@@ -664,7 +700,7 @@ export function Dashboard() {
 
         // Focus first element on open
         setTimeout(() => {
-            const firstElement = modalRef.current?.querySelector('button, [href], input') as HTMLElement;
+            const firstElement = activeModal.querySelector('button, [href], input, [tabindex]:not([tabindex="-1"])') as HTMLElement;
             firstElement?.focus();
         }, 100);
 
@@ -962,10 +998,111 @@ export function Dashboard() {
             setShowRedeemedHistory(true);
             setPendingRedemptionsPage(1);
             setRedeemedHistoryPage(1);
+            pushToast(
+                'success',
+                investmentIds.length === 1 ? 'Resgate marcado como concluído' : 'Resgates marcados como concluídos',
+                investmentIds.length === 1
+                    ? 'O ativo foi movido para o histórico operacional.'
+                    : `${investmentIds.length} ativos foram movidos para o histórico operacional.`,
+            );
         } catch (err: any) {
-            setRedemptionError(err?.message || 'Falha ao marcar resgate.');
+            const message = err?.message || 'Falha ao marcar resgate.';
+            setRedemptionError(message);
+            pushToast('error', 'Não foi possível atualizar o resgate', message);
         } finally {
             setRedeemingIds([]);
+        }
+    };
+
+    const closeFormModal = () => {
+        setShowForm(false);
+        setEditingInvestment(null);
+    };
+
+    const handleFormSuccess = () => {
+        const wasEditing = Boolean(editingInvestment);
+        closeFormModal();
+
+        void refresh()
+            .then(() => {
+                pushToast(
+                    'success',
+                    wasEditing ? 'Investimento atualizado' : 'Investimento cadastrado',
+                    wasEditing
+                        ? 'Os dados do ativo foram atualizados na carteira.'
+                        : 'O novo ativo já aparece na carteira.',
+                );
+            })
+            .catch((err: any) => {
+                pushToast(
+                    'error',
+                    'Investimento salvo, mas a carteira não recarregou',
+                    err?.message || 'Atualize a página para conferir os dados mais recentes.',
+                );
+            });
+    };
+
+    const handleExportHistory = async () => {
+        if (!selectedInvestment) {
+            return;
+        }
+
+        const investment = selectedInvestment;
+        setIsExportingHistory(true);
+
+        try {
+            const response = await api.get(`/investments/${investment.investmentId}/evolution`);
+            const data = await response.json();
+            const items = data.items || [];
+
+            if (items.length === 0) {
+                pushToast('error', 'Sem histórico para exportar', 'Ainda não há dados suficientes para gerar o CSV.');
+                return;
+            }
+
+            const headers = Object.keys(items[0]).join(';');
+            const rows = items
+                .map((row: any) => Object.values(row).map((value) => String(value).replace('.', ',')).join(';'))
+                .join('\n');
+            const csvContent = `${headers}\n${rows}`;
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = `extrato_${investment.productName.replace(/\s+/g, '_')}.csv`;
+            anchor.click();
+            URL.revokeObjectURL(url);
+
+            pushToast('success', 'Histórico exportado', `CSV gerado para ${investment.productName}.`);
+        } catch (err: any) {
+            console.error('Erro no export:', err);
+            pushToast('error', 'Falha ao exportar histórico', err?.message || 'Tente novamente em alguns instantes.');
+        } finally {
+            setIsExportingHistory(false);
+        }
+    };
+
+    const handleDeleteInvestment = async () => {
+        if (!investmentToDelete) {
+            return;
+        }
+
+        const investment = investmentToDelete;
+        setDeletingInvestmentId(investment.investmentId);
+
+        try {
+            await deleteInvestment(investment.investmentId);
+            setInvestmentToDelete(null);
+
+            if (selectedInvestment?.investmentId === investment.investmentId) {
+                setSelectedInvestment(null);
+            }
+
+            pushToast('success', 'Investimento excluído', `${investment.productName} foi removido da carteira.`);
+        } catch (err: any) {
+            pushToast('error', 'Não foi possível excluir o investimento', err?.message || 'Tente novamente.');
+        } finally {
+            setDeletingInvestmentId(null);
         }
     };
 
@@ -995,7 +1132,7 @@ export function Dashboard() {
             <div className="relative">
                 <button
                     onClick={() => setShowNotifications((current) => !current)}
-                    className="relative p-2 text-gray-400 hover:text-gray-500 dark:hover:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-full transition-colors"
+                    className="icon-action-button relative"
                     aria-label="Notificações de Vencimento"
                 >
                     <Bell size={20} />
@@ -1007,7 +1144,7 @@ export function Dashboard() {
                 </button>
 
                 {showNotifications && (
-                    <div className="absolute right-0 mt-2 w-96 max-w-[calc(100vw-2rem)] card shadow-xl border border-gray-100 dark:border-gray-800 z-30">
+                    <div className="absolute right-0 mt-2 z-30 w-[26rem] max-w-[calc(100vw-2rem)] rounded-[28px] border border-gray-100 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900">
                         <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-800 flex items-start justify-between gap-3">
                             <div>
                                 <p className="text-sm font-bold text-gray-800 dark:text-gray-100">Vencimentos</p>
@@ -1023,7 +1160,7 @@ export function Dashboard() {
                             </button>
                         </div>
 
-                        <div className="max-h-80 overflow-y-auto">
+                        <div className="scroll-area scroll-area-contained scrollbar-modern scrollbar-modern-inset max-h-80 overflow-y-auto px-1 py-1">
                             {maturityNotifications.length === 0 ? (
                                 <div className="px-4 py-6 text-sm text-gray-500 dark:text-gray-400">
                                     Nenhum alerta pendente. Alertas limpos voltam apenas quando o vencimento mudar de etapa.
@@ -1038,7 +1175,7 @@ export function Dashboard() {
                                                 setSelectedInvestment(investment);
                                                 setShowNotifications(false);
                                             }}
-                                            className="w-full text-left px-4 py-3 border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+                                            className="w-full rounded-2xl text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
                                         >
                                             <div className="flex items-start justify-between gap-3">
                                                 <div>
@@ -1060,15 +1197,15 @@ export function Dashboard() {
                     </div>
                 )}
             </div>
-            <span className="text-sm font-medium dark:text-gray-200">{user?.email}</span>
+            <span className="hidden text-sm font-medium text-gray-700 dark:text-gray-200 sm:block">{user?.email}</span>
             <button
                 onClick={toggleTheme}
-                className="p-2 text-gray-400 hover:text-gray-500 dark:hover:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-full transition-colors"
+                className="icon-action-button"
                 aria-label="Alternar tema"
             >
                 {theme === 'light' ? <MoonIcon size={20} /> : <SunIcon size={20} />}
             </button>
-            <button onClick={logout} className="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors" title="Sair" aria-label="Sair">
+            <button onClick={logout} className="icon-action-button" title="Sair" aria-label="Sair">
                 <LogOut size={20} />
             </button>
         </>
@@ -1085,33 +1222,35 @@ export function Dashboard() {
             >
                     {/* Market Data & Discovery */}
                     {indexes && (
-                        <div className="flex gap-4 mb-8 overflow-x-auto pb-4 custom-scrollbar overflow-visible">
+                        <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
                             {[
-                                { id: 'cdi', label: getIndexCardLabel('CDI'), rate: getIndexRateLabel('CDI'), color: 'blue', title: 'CDI (Certificado de Depósito Interbancário)', desc: 'A API entrega CDI na base diária. A home anualiza a taxa apenas para exibição do indicador macro.' },
-                                { id: 'selic', label: getIndexCardLabel('SELIC'), rate: getIndexRateLabel('SELIC'), color: 'purple', title: 'SELIC', desc: 'A tela exibe a taxa anual a partir da base diária retornada pela API, sem assumir automaticamente SELIC Meta.' },
-                                { id: 'ipca', label: getIndexCardLabel('IPCA'), rate: getIndexRateLabel('IPCA'), color: 'orange', title: 'IPCA', desc: 'Na home, o IPCA é mostrado como acumulado em 12 meses, que é a leitura mais comum para inflação. O cálculo dos investimentos continua usando o IPCA mensal do histórico.' }
+                                { id: 'cdi', key: 'CDI' as const, label: getIndexCardLabel('CDI'), rate: getIndexRateLabel('CDI'), color: 'blue', title: 'CDI (Certificado de Depósito Interbancário)', desc: 'A API entrega CDI na base diária. A home anualiza a taxa apenas para exibição do indicador macro.' },
+                                { id: 'selic', key: 'SELIC' as const, label: getIndexCardLabel('SELIC'), rate: getIndexRateLabel('SELIC'), color: 'purple', title: 'SELIC', desc: 'A tela exibe a taxa anual a partir da base diária retornada pela API, sem assumir automaticamente SELIC Meta.' },
+                                { id: 'ipca', key: 'IPCA' as const, label: getIndexCardLabel('IPCA'), rate: getIndexRateLabel('IPCA'), color: 'orange', title: 'IPCA', desc: 'Na home, o IPCA é mostrado como acumulado em 12 meses, que é a leitura mais comum para inflação. O cálculo dos investimentos continua usando o IPCA mensal do histórico.' }
                             ].map((idx) => {
-                                // Dynamic color class construction to avoid string replacement issues
-                                const bgColorClass = idx.color === 'blue' ? 'bg-blue-100 dark:bg-blue-900/30' : idx.color === 'purple' ? 'bg-purple-100 dark:bg-purple-900/30' : 'bg-orange-100 dark:bg-orange-900/30';
-                                const textColorClass = idx.color === 'blue' ? 'text-blue-600' : idx.color === 'purple' ? 'text-purple-600' : 'text-orange-600';
+                                const bgColorClass = idx.color === 'blue' ? 'bg-blue-100 dark:bg-blue-900/30' : idx.color === 'purple' ? 'bg-violet-100 dark:bg-violet-900/30' : 'bg-orange-100 dark:bg-orange-900/30';
+                                const textColorClass = idx.color === 'blue' ? 'text-blue-700 dark:text-blue-300' : idx.color === 'purple' ? 'text-violet-700 dark:text-violet-300' : 'text-orange-700 dark:text-orange-300';
 
                                 return (
-                                    <div key={idx.id} className="flex items-center gap-3 card px-4 py-3 min-w-[220px] relative overflow-visible">
-                                        <div className={`p-2 ${bgColorClass} ${textColorClass} rounded-lg`}>
-                                            <Activity size={18} />
-                                        </div>
-                                        <div className="flex-1">
-                                            <div className="flex items-center justify-between">
-                                                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">{idx.label}</p>
-                                                <InfoPopover
-                                                    tooltipId={idx.id}
-                                                    title={idx.title}
-                                                    description={idx.desc}
-                                                    activeTooltip={activeTooltip}
-                                                    onToggle={setActiveTooltip}
-                                                />
+                                    <div key={idx.id} className="card relative overflow-visible border-gray-100 px-5 py-4 dark:border-gray-800">
+                                        <div className="flex items-start gap-4">
+                                            <div className={`rounded-2xl p-3 ${bgColorClass} ${textColorClass}`}>
+                                                <Activity size={18} />
                                             </div>
-                                            <p className="text-lg font-semibold text-gray-800 dark:text-gray-100">{idx.rate}</p>
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">{idx.label}</p>
+                                                    <InfoPopover
+                                                        tooltipId={idx.id}
+                                                        title={idx.title}
+                                                        description={idx.desc}
+                                                        activeTooltip={activeTooltip}
+                                                        onToggle={setActiveTooltip}
+                                                    />
+                                                </div>
+                                                <p className="mt-2 text-2xl font-bold text-gray-900 dark:text-white">{idx.rate}</p>
+                                                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Atualizado em {getIndexUpdatedLabel(idx.key)}</p>
+                                            </div>
                                         </div>
                                     </div>
                                 );
@@ -1121,7 +1260,7 @@ export function Dashboard() {
 
                     {/* Resumo da Carteira */}
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-8">
-                        <div className="card p-6 hover:shadow-lg transition-all duration-300">
+                        <div className="card p-6 bg-gradient-to-br from-slate-50 via-white to-blue-50 hover:shadow-lg transition-all duration-300 dark:from-slate-900 dark:via-gray-900 dark:to-blue-950/30">
                             <div className="flex justify-between items-start">
                                 <div className="min-w-0">
                                     <div className="flex items-center gap-2">
@@ -1134,7 +1273,7 @@ export function Dashboard() {
                                             onToggle={setActiveTooltip}
                                         />
                                     </div>
-                                    <p className={`${summaryPrimaryValueClass} text-gray-100`}>{formatCurrency(displayConsolidatedValue)}</p>
+                                    <p className={`${summaryPrimaryValueClass} text-gray-900 dark:text-white`}>{formatCurrency(displayConsolidatedValue)}</p>
                                 </div>
                                 <div className={`flex items-center px-2 py-1 rounded-lg text-xs font-bold ${displayActiveOpenProfit >= 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}`}>
                                     {displayActiveOpenProfit >= 0 ? '+' : ''}{(displayActiveOpenProfitPct * 100).toFixed(2)}%
@@ -1142,13 +1281,13 @@ export function Dashboard() {
                                 </div>
                             </div>
                             <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
-                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                <p className="text-xs text-gray-600 dark:text-gray-300">
                                     Base patrimonial operacional: posições ativas, ativos em liquidação e caixa disponível derivado do histórico resgatado.
                                 </p>
                             </div>
                         </div>
 
-                        <div className="card p-6 hover:shadow-lg transition-all duration-300">
+                        <div className="card p-6 bg-gradient-to-br from-green-50 via-white to-emerald-50 hover:shadow-lg transition-all duration-300 dark:from-green-950/30 dark:via-gray-900 dark:to-emerald-950/30">
                             <div className="flex items-center gap-2">
                                 <h3 className={summaryCardTitleClass}>Resultado em Aberto</h3>
                                 <InfoPopover
@@ -1163,13 +1302,13 @@ export function Dashboard() {
                                 {displayActiveOpenProfit >= 0 ? '+' : ''}{formatCurrency(displayActiveOpenProfit)}
                             </p>
                             <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
-                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                <p className="text-xs text-gray-600 dark:text-gray-300">
                                     Mostra apenas o resultado ainda não realizado das posições ativas. Resgates marcados ficam fora deste cálculo.
                                 </p>
                             </div>
                         </div>
 
-                        <div className="card p-6 hover:shadow-lg transition-all duration-300">
+                        <div className="card p-6 bg-gradient-to-br from-blue-50 via-white to-indigo-50 hover:shadow-lg transition-all duration-300 dark:from-blue-950/30 dark:via-gray-900 dark:to-indigo-950/30">
                             <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
                                     <div className="flex items-center gap-2">
@@ -1492,7 +1631,7 @@ export function Dashboard() {
                                     </div>
 
                                     {showPendingRedemptions && (
-                                        <div className="overflow-x-auto border-t border-gray-100 dark:border-gray-800">
+                                        <div className="scroll-area scrollbar-modern scrollbar-modern-inset overflow-x-auto border-t border-gray-100 dark:border-gray-800">
                                             <table className="min-w-full divide-y divide-gray-100 dark:divide-gray-800">
                                                 <thead className="bg-white dark:bg-gray-900">
                                                     <tr>
@@ -1608,7 +1747,7 @@ export function Dashboard() {
                                     </div>
 
                                     {showRedeemedHistory && (
-                                        <div className="overflow-x-auto border-t border-gray-100 dark:border-gray-800">
+                                        <div className="scroll-area scrollbar-modern scrollbar-modern-inset overflow-x-auto border-t border-gray-100 dark:border-gray-800">
                                             <table className="min-w-full divide-y divide-gray-100 dark:divide-gray-800">
                                                 <thead className="bg-white dark:bg-gray-900">
                                                     <tr>
@@ -1677,25 +1816,33 @@ export function Dashboard() {
 
                     {/* Form Modal */}
                     {showForm && (
-                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 transition-opacity animate-in fade-in duration-300">
-                            <div className="card p-0 w-full max-w-2xl shadow-xl relative animate-fade-in-up bg-white dark:bg-gray-900 flex flex-col max-h-[90vh]">
-                                <div className="flex justify-between items-center p-6 border-b border-gray-100 dark:border-gray-800 shrink-0">
-                                    <h3 className="text-xl font-bold dark:text-white">
+                        <div className="fixed inset-0 z-50 bg-black/60 transition-opacity animate-in fade-in duration-300 sm:flex sm:items-center sm:justify-center sm:p-4">
+                            <div
+                                ref={formModalRef}
+                                role="dialog"
+                                aria-modal="true"
+                                aria-labelledby="investment-form-title"
+                                className="card relative flex h-full w-full flex-col overflow-hidden rounded-none border-0 bg-white p-0 shadow-xl animate-fade-in-up dark:bg-gray-900 sm:h-auto sm:max-h-[92vh] sm:max-w-2xl sm:rounded-[28px] sm:border sm:border-gray-100 dark:sm:border-gray-800"
+                            >
+                                <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-100 bg-white/95 px-4 py-4 backdrop-blur dark:border-gray-800 dark:bg-gray-900/95 sm:px-6">
+                                    <h3 id="investment-form-title" className="text-xl font-bold dark:text-white">
                                         {editingInvestment ? 'Editar Investimento' : 'Novo Investimento'}
                                     </h3>
                                     <button
-                                        onClick={() => { setShowForm(false); setEditingInvestment(null); }}
-                                        className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors p-2.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                                        type="button"
+                                        onClick={closeFormModal}
+                                        aria-label="Fechar formulário de investimento"
+                                        className="icon-action-button"
                                     >
                                         <X size={24} />
                                     </button>
                                 </div>
-                                <div className="p-6 overflow-y-auto">
+                                <div className="scroll-area scroll-area-contained scrollbar-modern scrollbar-modern-inset flex-1 overflow-y-auto px-4 pb-4 pt-4 sm:px-6 sm:pb-6">
                                     <Suspense fallback={<div className="py-16"><Loader size="lg" text="Carregando formulário..." /></div>}>
                                         <LazyInvestmentForm
                                             initialData={editingInvestment}
-                                            onSuccess={() => { setShowForm(false); setEditingInvestment(null); refresh(); }}
-                                            onCancel={() => { setShowForm(false); setEditingInvestment(null); }}
+                                            onSuccess={handleFormSuccess}
+                                            onCancel={closeFormModal}
                                         />
                                     </Suspense>
                                 </div>
@@ -1771,8 +1918,123 @@ export function Dashboard() {
                                             </div>
                                         </div>
 
-                                        <div className={`overflow-x-auto transition-all ${isExpanded ? 'max-h-[2000px] opacity-100 pb-6' : 'max-h-0 opacity-0 pointer-events-none'}`}>
-                                            <table className="min-w-full divide-y divide-gray-100 dark:divide-gray-800">
+                                        <div className={`transition-all ${isExpanded ? 'max-h-[2000px] opacity-100 pb-6' : 'max-h-0 opacity-0 pointer-events-none'}`}>
+                                            <div className="space-y-3 px-4 pt-4 md:hidden">
+                                                {pagedItems.map((inv) => {
+                                                    const benchmarkDescriptor = getBenchmarkDescriptor(inv);
+                                                    const opportunityBadge = getOpportunityBadge(inv.investmentId);
+                                                    const maturityBadge = getMaturityBadge(inv);
+                                                    const currentBookValue = getCurrentBookValue(inv);
+                                                    const allocationPct = ((currentBookValue / (totalCurrentValue || 1)) * 100).toFixed(1);
+
+                                                    return (
+                                                        <article
+                                                            key={`${inv.investmentId}-mobile`}
+                                                            className="rounded-2xl border border-gray-200 bg-white/90 p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900/70"
+                                                        >
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setSelectedInvestment(inv)}
+                                                                className="w-full text-left"
+                                                                aria-label={`Abrir detalhes de ${inv.productName}`}
+                                                            >
+                                                                <div className="flex items-start justify-between gap-3">
+                                                                    <div className="min-w-0">
+                                                                        <p className="text-sm font-bold text-gray-900 dark:text-white">{inv.productName}</p>
+                                                                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{inv.issuer}</p>
+                                                                    </div>
+                                                                    <div className="flex flex-col items-end gap-2">
+                                                                        <span className="rounded-full bg-blue-100 px-2 py-1 text-[10px] font-bold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                                                                            {allocationPct}% da carteira
+                                                                        </span>
+                                                                        {maturityBadge && (
+                                                                            <span className={`inline-flex w-fit rounded-full px-2 py-1 text-[10px] font-bold ${maturityBadge.className}`}>
+                                                                                {maturityBadge.label}
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+
+                                                                {opportunityBadge && (
+                                                                    <span className={`mt-3 inline-flex items-center rounded-full px-2 py-1 text-[10px] font-bold ${opportunityBadge.className}`}>
+                                                                        {opportunityBadge.label}
+                                                                    </span>
+                                                                )}
+
+                                                                <div className="mt-4 grid grid-cols-2 gap-3 text-left">
+                                                                    <div className="rounded-xl bg-gray-50 px-3 py-2 dark:bg-gray-800/70">
+                                                                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Aplicação</p>
+                                                                        <p className="mt-1 text-xs font-semibold text-gray-800 dark:text-gray-200">{formatDatePtBr(inv.applicationDate)}</p>
+                                                                    </div>
+                                                                    <div className="rounded-xl bg-gray-50 px-3 py-2 dark:bg-gray-800/70">
+                                                                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Vencimento</p>
+                                                                        <p className="mt-1 text-xs font-semibold text-gray-800 dark:text-gray-200">{formatDatePtBr(inv.maturityDate)}</p>
+                                                                    </div>
+                                                                    <div className="rounded-xl bg-blue-50 px-3 py-2 dark:bg-blue-900/20">
+                                                                        <p className="text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">Rentabilidade</p>
+                                                                        <p className="mt-1 text-sm font-bold text-blue-700 dark:text-blue-300">{formatInvestmentRate(inv)}</p>
+                                                                        {benchmarkDescriptor && (
+                                                                            <p className="mt-1 text-[10px] text-blue-700/80 dark:text-blue-300/80">
+                                                                                {benchmarkDescriptor.comparator}
+                                                                            </p>
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="rounded-xl bg-green-50 px-3 py-2 dark:bg-green-900/20">
+                                                                        <p className="text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-300">Saldo Bruto</p>
+                                                                        <p className="mt-1 text-sm font-bold text-green-700 dark:text-green-300">{formatCurrency(currentBookValue)}</p>
+                                                                        {(inv as any).grossReturnPct !== undefined && (
+                                                                            <p className={`mt-1 text-[10px] font-bold ${(inv as any).grossReturnPct >= 0 ? 'text-green-700 dark:text-green-300' : 'text-red-600 dark:text-red-400'}`}>
+                                                                                {((inv as any).grossReturnPct * 100).toFixed(1)}% rend.
+                                                                            </p>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="mt-3 grid grid-cols-2 gap-3 text-left">
+                                                                    <div>
+                                                                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Principal</p>
+                                                                        <p className="mt-1 text-xs font-semibold text-gray-800 dark:text-gray-200">{formatCurrency(inv.amountInvested)}</p>
+                                                                    </div>
+                                                                    <div>
+                                                                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Benchmark</p>
+                                                                        <p className="mt-1 text-xs font-semibold text-gray-800 dark:text-gray-200">
+                                                                            {benchmarkDescriptor ? benchmarkDescriptor.benchmark.replace('Benchmark: ', '') : 'Sem comparação'}
+                                                                        </p>
+                                                                        {typeof inv.excessReturnPct === 'number' && (
+                                                                            <p className={`mt-1 text-[10px] font-bold ${getSignedClass(inv.excessReturnPct, 'text-green-600 dark:text-green-400', 'text-red-600 dark:text-red-400', 'text-gray-500 dark:text-gray-400')}`}>
+                                                                                {formatPercentagePoints(inv.excessReturnPct)} {getBenchmarkExcessLabel(inv)}
+                                                                            </p>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            </button>
+
+                                                            <div className="mt-4 flex gap-3 border-t border-gray-100 pt-4 dark:border-gray-800">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        setEditingInvestment(inv);
+                                                                        setShowForm(true);
+                                                                    }}
+                                                                    className="btn-secondary flex-1"
+                                                                >
+                                                                    Editar
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setInvestmentToDelete(inv)}
+                                                                    className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-100 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
+                                                                >
+                                                                    Excluir
+                                                                </button>
+                                                            </div>
+                                                        </article>
+                                                    );
+                                                })}
+                                            </div>
+
+                                            <div className="scroll-area scrollbar-modern scrollbar-modern-inset hidden overflow-x-auto border-t border-gray-100 dark:border-gray-800 md:block">
+                                                <table className="min-w-full divide-y divide-gray-100 dark:divide-gray-800">
                                                 <thead className="bg-white dark:bg-gray-900">
                                                     <tr>
                                                         {renderSortHeader('Ativo', 'productName')}
@@ -1789,6 +2051,7 @@ export function Dashboard() {
                                                     {pagedItems.map((inv) => {
                                                         const benchmarkDescriptor = getBenchmarkDescriptor(inv);
                                                         const opportunityBadge = getOpportunityBadge(inv.investmentId);
+                                                        const maturityBadge = getMaturityBadge(inv);
 
                                                         return (
                                                         <tr
@@ -1818,9 +2081,9 @@ export function Dashboard() {
                                                             <td className="px-6 py-4 text-xs text-gray-500 dark:text-gray-400">
                                                                 <div className="flex flex-col gap-1">
                                                                     <span>{formatDatePtBr(inv.maturityDate)}</span>
-                                                                    {getMaturityBadge(inv) && (
-                                                                        <span className={`inline-flex w-fit text-[10px] font-bold px-2 py-0.5 rounded-full ${getMaturityBadge(inv)?.className}`}>
-                                                                            {getMaturityBadge(inv)?.label}
+                                                                    {maturityBadge && (
+                                                                        <span className={`inline-flex w-fit text-[10px] font-bold px-2 py-0.5 rounded-full ${maturityBadge.className}`}>
+                                                                            {maturityBadge.label}
                                                                         </span>
                                                                     )}
                                                                 </div>
@@ -1870,14 +2133,25 @@ export function Dashboard() {
                                                             <td className="px-6 py-4 text-center">
                                                                 <div className="flex justify-center gap-3">
                                                                     <button
-                                                                        onClick={(e) => { e.stopPropagation(); setEditingInvestment(inv); setShowForm(true); }}
-                                                                        className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                                                                        type="button"
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            setEditingInvestment(inv);
+                                                                            setShowForm(true);
+                                                                        }}
+                                                                        aria-label={`Editar ${inv.productName}`}
+                                                                        className="icon-action-button"
                                                                     >
                                                                         <Pencil size={16} />
                                                                     </button>
                                                                     <button
-                                                                        onClick={(e) => { e.stopPropagation(); setInvestmentToDelete(inv); }}
-                                                                        className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                                                                        type="button"
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            setInvestmentToDelete(inv);
+                                                                        }}
+                                                                        aria-label={`Excluir ${inv.productName}`}
+                                                                        className="icon-action-button-danger"
                                                                     >
                                                                         <X size={16} />
                                                                     </button>
@@ -1887,12 +2161,13 @@ export function Dashboard() {
                                                         );
                                                     })}
                                                 </tbody>
-                                            </table>
+                                                </table>
+                                            </div>
 
                                             {totalPages > 1 && (
-                                                <div className="mt-6 px-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                                <div className="mt-6 flex flex-col gap-3 px-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
                                                     <p className="text-xs text-gray-500 dark:text-gray-400">
-                                                    Página {page} de {totalPages} - exibindo {pagedItems.length} de {items.length} ativos
+                                                        Página {page} de {totalPages} - exibindo {pagedItems.length} de {items.length} ativos
                                                     </p>
                                                     <div className="flex flex-wrap items-center justify-center gap-2">
                                                         <button
@@ -1902,7 +2177,7 @@ export function Dashboard() {
                                                                 setGroupPagination(prev => ({ ...prev, [type]: Math.max(1, page - 1) }));
                                                             }}
                                                             disabled={page === 1}
-                                                            className="px-3 py-2 text-xs font-bold rounded-xl border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-1"
+                                                            className="inline-flex items-center gap-1 rounded-xl border border-gray-200 px-3 py-2 text-xs font-bold text-gray-700 transition-colors hover:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-200"
                                                         >
                                                             <ChevronLeft size={14} />
                                                             Anterior
@@ -1916,7 +2191,7 @@ export function Dashboard() {
                                                                         e.stopPropagation();
                                                                         setGroupPagination(prev => ({ ...prev, [type]: 1 }));
                                                                     }}
-                                                                    className="w-9 h-9 text-xs font-bold rounded-xl border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-blue-500 transition-colors"
+                                                                    className="h-9 w-9 rounded-xl border border-gray-200 text-xs font-bold text-gray-700 transition-colors hover:border-blue-500 dark:border-gray-700 dark:text-gray-200"
                                                                 >
                                                                     1
                                                                 </button>
@@ -1935,10 +2210,10 @@ export function Dashboard() {
                                                                     setGroupPagination(prev => ({ ...prev, [type]: pageNumber }));
                                                                 }}
                                                                 aria-label={`Página ${pageNumber} de ${totalPages}`}
-                                                                className={`w-9 h-9 text-xs font-bold rounded-xl border transition-colors ${
+                                                                className={`h-9 w-9 rounded-xl border text-xs font-bold transition-colors ${
                                                                     pageNumber === page
                                                                         ? 'bg-blue-600 border-blue-600 text-white'
-                                                                        : 'border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-blue-500'
+                                                                        : 'border-gray-200 text-gray-700 hover:border-blue-500 dark:border-gray-700 dark:text-gray-200'
                                                                 }`}
                                                             >
                                                                 {pageNumber}
@@ -1956,7 +2231,7 @@ export function Dashboard() {
                                                                         e.stopPropagation();
                                                                         setGroupPagination(prev => ({ ...prev, [type]: totalPages }));
                                                                     }}
-                                                                    className="w-9 h-9 text-xs font-bold rounded-xl border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-blue-500 transition-colors"
+                                                                    className="h-9 w-9 rounded-xl border border-gray-200 text-xs font-bold text-gray-700 transition-colors hover:border-blue-500 dark:border-gray-700 dark:text-gray-200"
                                                                 >
                                                                     {totalPages}
                                                                 </button>
@@ -1970,7 +2245,7 @@ export function Dashboard() {
                                                                 setGroupPagination(prev => ({ ...prev, [type]: Math.min(totalPages, page + 1) }));
                                                             }}
                                                             disabled={page === totalPages}
-                                                            className="px-3 py-2 text-xs font-bold rounded-xl border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-1"
+                                                            className="inline-flex items-center gap-1 rounded-xl border border-gray-200 px-3 py-2 text-xs font-bold text-gray-700 transition-colors hover:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-200"
                                                         >
                                                             Próxima
                                                             <ChevronRight size={14} />
@@ -1988,23 +2263,30 @@ export function Dashboard() {
 
             {/* Details Modal */}
             {selectedInvestment && (
-                <div className="fixed inset-0 bg-black/50 flex items-start sm:items-center justify-center overflow-y-auto p-4 z-50 transition-opacity animate-in fade-in duration-300">
+                <div className="fixed inset-0 z-50 bg-black/60 transition-opacity animate-in fade-in duration-300 sm:flex sm:items-center sm:justify-center sm:p-4">
                     <div
-                        ref={modalRef}
-                        className="card p-6 w-full max-w-lg shadow-xl relative animate-fade-in-up max-h-[calc(100vh-2rem)] overflow-y-auto my-auto"
+                        ref={detailsModalRef}
+                        className="card relative flex h-full w-full flex-col overflow-hidden rounded-none border-0 bg-white p-0 shadow-xl animate-fade-in-up dark:bg-gray-900 sm:h-auto sm:max-h-[calc(100vh-2rem)] sm:max-w-2xl sm:rounded-[30px] sm:border sm:border-gray-100 dark:sm:border-gray-800"
                         role="dialog"
                         aria-modal="true"
+                        aria-labelledby="investment-details-title"
                     >
-                        <button
-                            onClick={() => setSelectedInvestment(null)}
-                            className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors rounded-lg p-2.5 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        >
-                            <X size={24} />
-                        </button>
+                        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-gray-100 bg-white/95 px-4 py-4 backdrop-blur dark:border-gray-800 dark:bg-gray-900/95 sm:px-6">
+                            <div className="min-w-0">
+                                <h3 id="investment-details-title" className="text-xl font-bold text-gray-900 dark:text-white">{selectedInvestment.productName}</h3>
+                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{selectedInvestment.issuer} • {selectedInvestment.type}</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setSelectedInvestment(null)}
+                                aria-label="Fechar detalhes do investimento"
+                                className="icon-action-button shrink-0"
+                            >
+                                <X size={24} />
+                            </button>
+                        </div>
 
-                        <h3 className="text-xl font-bold mb-1">{selectedInvestment.productName}</h3>
-                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{selectedInvestment.issuer} • {selectedInvestment.type}</p>
-
+                        <div className="scroll-area scroll-area-contained scrollbar-modern scrollbar-modern-inset flex-1 overflow-y-auto px-4 pb-6 pt-4 sm:px-6">
                         <div className="space-y-4">
                             <div className="flex justify-between border-b border-gray-100 dark:border-gray-800 pb-2">
                                 <span className="text-gray-600 dark:text-gray-400">Valor Investido</span>
@@ -2145,41 +2427,27 @@ export function Dashboard() {
                                 onPeriodSummaryChange={setSelectedInvestmentPeriodSummary}
                             />
                         </Suspense>
+                        </div>
 
-                        <div className="mt-8 flex gap-3">
-                            <button
-                                onClick={async () => {
-                                    try {
-                                        const res = await api.get(`/investments/${selectedInvestment.investmentId}/evolution`);
-                                        const data = await res.json();
-                                        const items = data.items || [];
-                                        if (items.length === 0) return;
-                                        const headers = Object.keys(items[0]).join(';');
-                                        const rows = items.map((row: any) =>
-                                            Object.values(row).map(val => String(val).replace('.', ',')).join(';')
-                                        ).join('\n');
-                                        const csvContent = `${headers}\n${rows}`;
-                                        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-                                        const url = URL.createObjectURL(blob);
-                                        const a = document.createElement('a');
-                                        a.href = url;
-                                        a.download = `extrato_${selectedInvestment.productName.replace(/\s+/g, '_')}.csv`;
-                                        a.click();
-                                    } catch (err) {
-                                        console.error("Erro no export:", err);
-                                    }
-                                }}
-                                className="btn-secondary flex-1 flex justify-center items-center py-2"
-                            >
-                                <ArrowDown size={14} className="mr-2" />
-                                Exportar Histórico
-                            </button>
-                            <button
-                                onClick={() => setSelectedInvestment(null)}
-                                className="btn-primary flex-1 py-2"
-                            >
-                                Fechar
-                            </button>
+                        <div className="shrink-0 border-t border-gray-100 bg-white/95 px-4 py-4 backdrop-blur dark:border-gray-800 dark:bg-gray-900/95 sm:px-6">
+                            <div className="flex flex-col gap-3 sm:flex-row">
+                                <button
+                                    type="button"
+                                    onClick={handleExportHistory}
+                                    disabled={isExportingHistory}
+                                    className="btn-secondary flex-1 justify-center py-2"
+                                >
+                                    <ArrowDown size={14} className="mr-2" />
+                                    {isExportingHistory ? 'Exportando...' : 'Exportar Histórico'}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedInvestment(null)}
+                                    className="btn-primary flex-1 py-2"
+                                >
+                                    Fechar
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -2192,20 +2460,21 @@ export function Dashboard() {
                         <h3 className="text-xl font-bold mb-2">Excluir investimento?</h3>
                         <p className="text-gray-500 dark:text-gray-400 mb-6 text-sm">Esta ação não pode ser desfeita. Deseja realmente remover <strong>{investmentToDelete.productName}</strong>?</p>
                         <div className="flex gap-3">
-                            <button onClick={() => setInvestmentToDelete(null)} className="btn-secondary flex-1">Cancelar</button>
+                            <button type="button" onClick={() => setInvestmentToDelete(null)} className="btn-secondary flex-1">Cancelar</button>
                             <button
-                                onClick={() => {
-                                    deleteInvestment(investmentToDelete.investmentId);
-                                    setInvestmentToDelete(null);
-                                }}
+                                type="button"
+                                onClick={handleDeleteInvestment}
+                                disabled={deletingInvestmentId === investmentToDelete.investmentId}
                                 className="btn-primary bg-red-600 hover:bg-red-700 border-red-600 text-white flex-1"
                             >
-                                Excluir
+                                {deletingInvestmentId === investmentToDelete.investmentId ? 'Excluindo...' : 'Excluir'}
                             </button>
                         </div>
                     </div>
                 </div>
             )}
+
+            <ToastStack toasts={toasts} onDismiss={dismissToast} />
         </>
     );
 }

@@ -21,7 +21,6 @@ export function Login() {
 
         try {
             const response = await api.post('/auth/login', { email, password });
-
             const data = await response.json();
 
             if (!response.ok) {
@@ -38,27 +37,27 @@ export function Login() {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 py-12 px-4 sm:px-6 lg:px-8 transition-colors">
-            <div className="max-w-md w-full space-y-8 card p-8">
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4 py-12 transition-colors dark:bg-gray-900 sm:px-6 lg:px-8">
+            <div className="card max-w-md w-full space-y-8 p-8">
                 <div>
                     <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900 dark:text-white">
                         InvestAdmin
                     </h2>
                     <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-400">
-                        Acesse sua conta
+                        {'Acesse sua conta'}
                     </p>
                 </div>
                 <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
                     {error && (
-                        <div className="flex items-start gap-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-4 rounded-lg border border-red-100 dark:border-red-900/50">
-                            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                        <div className="flex items-start gap-3 rounded-lg border border-red-100 bg-red-50 p-4 text-red-600 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-400">
+                            <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0" />
                             <p className="text-sm">{error}</p>
                         </div>
                     )}
 
                     <div className="space-y-4">
                         <div>
-                            <label htmlFor="email-address" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            <label htmlFor="email-address" className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
                                 Email
                             </label>
                             <input
@@ -73,8 +72,8 @@ export function Login() {
                             />
                         </div>
                         <div>
-                            <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                Senha
+                            <label htmlFor="password" className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                                {'Senha'}
                             </label>
                             <input
                                 id="password"
@@ -93,12 +92,12 @@ export function Login() {
                         <button
                             type="submit"
                             disabled={loading}
-                            className={`w-full btn-primary ${loading ? 'opacity-70 cursor-not-allowed' : ''}`}
+                            className={`w-full btn-primary ${loading ? 'cursor-not-allowed opacity-70' : ''}`}
                         >
                             {loading ? (
                                 <span className="flex items-center justify-center gap-2">
                                     <Loader size="sm" className="text-white dark:text-white" />
-                                    Entrando...
+                                    {'Entrando...'}
                                 </span>
                             ) : (
                                 'Entrar'
@@ -106,9 +105,9 @@ export function Login() {
                         </button>
                     </div>
 
-                    <div className="text-sm text-center">
+                    <div className="text-center text-sm">
                         <Link to="/register" className="font-medium text-blue-600 hover:text-blue-500">
-                            Ainda não tem conta? Cadastre-se
+                            {'Ainda n\u00e3o tem conta? Cadastre-se'}
                         </Link>
                     </div>
                 </form>

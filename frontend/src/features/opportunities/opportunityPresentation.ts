@@ -39,7 +39,7 @@ export function formatOpportunityPercentagePoints(value: number | null) {
         return '--';
     }
 
-    return `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)} p.p.`;
+    return `${value >= 0 ? '+' : ''}${(value * 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} p.p.`;
 }
 
 export function getOpportunityDisplayBenchmarkLabel(opportunity: InvestmentOpportunity) {
