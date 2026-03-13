@@ -1,17 +1,8 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { getDynamoClientProps } from "../utils/runtime";
 
-const isOffline = process.env.IS_OFFLINE !== 'false';
-
-const clientProps = isOffline
-  ? {
-      region: 'localhost',
-      endpoint: 'http://localhost:8000',
-      credentials: { accessKeyId: 'MockAccessKeyId', secretAccessKey: 'MockSecretAccessKey' },
-    }
-  : {
-      region: process.env.AWS_REGION || 'us-east-1',
-    };
+const clientProps = getDynamoClientProps();
 
 export const dynamoDbClient = new DynamoDBClient(clientProps);
 

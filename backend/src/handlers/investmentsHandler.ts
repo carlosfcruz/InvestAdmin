@@ -15,14 +15,9 @@ import { getTodayDateKey, parseInvestmentDate, toDateKey } from "../utils/date";
 import { getDefaultIndexerForType, isIndexerAllowedForType } from "../domain/productRules";
 import { attachBenchmarkSummaries } from "../services/portfolioAnalytics";
 import { analyzeInvestmentOpportunities } from "../services/investmentOpportunities";
+import { getJwtSecret } from "../utils/runtime";
 
-const JWT_SECRET = process.env.JWT_SECRET;
-const isOffline = process.env.IS_OFFLINE !== 'false';
-
-if (!JWT_SECRET && !isOffline) {
-  throw new Error('FATAL: JWT_SECRET environment variable is missing in production.');
-}
-const SECRET = JWT_SECRET || 'super-secret-local-key';
+const SECRET = getJwtSecret();
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "OPTIONS";
 

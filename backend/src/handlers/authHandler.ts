@@ -6,14 +6,9 @@ import { PutCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import * as crypto from 'crypto';
 import * as cookie from 'cookie';
 import { sanitizeObject, withSecurityHeaders } from '../utils/security';
+import { getJwtSecret } from '../utils/runtime';
 
-const isOffline = process.env.IS_OFFLINE !== 'false';
-const JWT_SECRET = process.env.JWT_SECRET;
-
-if (!JWT_SECRET && !isOffline) {
-    throw new Error('FATAL: JWT_SECRET environment variable is missing in production.');
-}
-const SECRET = JWT_SECRET || 'super-secret-local-key';
+const SECRET = getJwtSecret();
 
 // Simple in-memory rate limiter for MVP (Lambda execution context)
 // Ideal for AWS Free Tier without Redis, but state doesn't persist across cold starts. 
