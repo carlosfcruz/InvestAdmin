@@ -1,0 +1,36 @@
+config:
+  target: 'http://localhost:4000'
+  phases:
+    - duration: 15
+      arrivalRate: 5
+      name: "Warm up (5 req/sec)"
+    - duration: 30
+      arrivalRate: 20
+      name: "Ramp up load (20 req/sec)"
+    - duration: 15
+      arrivalRate: 50
+      name: "Spike (50 req/sec)"
+  plugins:
+    expect: {}
+scenarios:
+  - name: 'Full Dashboard Flow (Heavy User)'
+    flow:
+      # Step 1: Login
+      - post:
+          url: '/api/auth/login'
+          json:
+            email: 'heavy@teste.com'
+            password: 'Senha123!'
+          capture:
+            - header: 'set-cookie'
+              as: 'cookieStr'
+      # Step 2: List Investments
+      - get:
+          url: '/api/investments'
+          headers:
+            Cookie: '{{ cookieStr }}'
+      # Step 3: Fetch Global Evolution (Heavy processing)
+      - get:
+          url: '/api/investments/evolution'
+          headers:
+            Cookie: '{{ cookieStr }}'
