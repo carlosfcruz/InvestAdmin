@@ -2,17 +2,13 @@ import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { BatchWriteCommand, DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import * as bcrypt from "bcryptjs";
 import * as crypto from "crypto";
+import { getOrCreateSeedPassword } from "./devSecrets";
 
-const isOffline = process.env.IS_OFFLINE !== "false";
-const clientProps = isOffline
-  ? {
-      region: "localhost",
-      endpoint: "http://localhost:8000",
-      credentials: { accessKeyId: "MockAccessKeyId", secretAccessKey: "MockSecretAccessKey" },
-    }
-  : {
-      region: process.env.AWS_REGION || "us-east-1",
-    };
+const clientProps = {
+  region: "localhost",
+  endpoint: process.env.DYNAMODB_ENDPOINT || "http://localhost:8000",
+  credentials: { accessKeyId: "MockAccessKeyId", secretAccessKey: "MockSecretAccessKey" },
+};
 
 const client = new DynamoDBClient(clientProps);
 const docClient = DynamoDBDocumentClient.from(client, {
@@ -23,7 +19,7 @@ const USERS_TABLE = "Users";
 const INVESTMENTS_TABLE = "Investments";
 const FUND_QUOTES_TABLE = "FundQuotes";
 const BATCH_SIZE = 25;
-const COMMON_PASSWORD = "Senha123!";
+const COMMON_PASSWORD = getOrCreateSeedPassword();
 const HEAVY_USER_EMAIL = "heavy@teste.com";
 const HEAVY_USER_INVESTMENTS = 1500;
 const STANDARD_USER_COUNT = 12;

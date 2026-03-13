@@ -1,11 +1,14 @@
-import { handler as authHandler } from "../src/handlers/authHandler";
-import { handler as investmentsHandler } from "../src/handlers/investmentsHandler";
-import { handler as indexesHandler } from "../src/handlers/indexesHandler";
+import { requireSeedPassword } from "./devSecrets";
 
+process.env.IS_OFFLINE = "true";
+process.env.DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT || "http://localhost:8000";
+process.env.JWT_SECRET = process.env.JWT_SECRET || "smoke-test-only-secret";
+
+const sharedPassword = requireSeedPassword();
 const users = [
-  { email: "qa.user1@teste.com", password: "Senha123!", minInvestments: 12 },
-  { email: "qa.user6@teste.com", password: "Senha123!", minInvestments: 12 },
-  { email: "heavy@teste.com", password: "Senha123!", minInvestments: 1500 },
+  { email: "qa.user1@teste.com", password: sharedPassword, minInvestments: 12 },
+  { email: "qa.user6@teste.com", password: sharedPassword, minInvestments: 12 },
+  { email: "heavy@teste.com", password: sharedPassword, minInvestments: 1500 },
 ];
 
 function createEvent(method: string, path: string, body?: unknown, headers: Record<string, string> = {}) {
@@ -24,15 +27,21 @@ function createEvent(method: string, path: string, body?: unknown, headers: Reco
   } as any;
 }
 
-async function login(email: string, password: string) {
-  const response = await authHandler(createEvent("POST", "/api/auth/login", { email, password }));
-  const body = JSON.parse(response.body || "{}");
-  const rawCookie = response.headers?.["Set-Cookie"] || response.headers?.["set-cookie"] || "";
-  const cookie = String(rawCookie);
-  return { response, body, cookie };
-}
-
 async function run() {
+  const [{ handler: authHandler }, { handler: investmentsHandler }, { handler: indexesHandler }] = await Promise.all([
+    import("../src/handlers/authHandler"),
+    import("../src/handlers/investmentsHandler"),
+    import("../src/handlers/indexesHandler"),
+  ]);
+
+  async function login(email: string, password: string) {
+    const response = await authHandler(createEvent("POST", "/api/auth/login", { email, password }));
+    const body = JSON.parse(response.body || "{}");
+    const rawCookie = response.headers?.["Set-Cookie"] || response.headers?.["set-cookie"] || "";
+    const cookie = String(rawCookie);
+    return { response, body, cookie };
+  }
+
   for (const user of users) {
     const loginResult = await login(user.email, user.password);
     if (loginResult.response.statusCode !== 200 || !loginResult.cookie) {

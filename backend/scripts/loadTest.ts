@@ -1,8 +1,11 @@
-import { handler as authHandler } from "../src/handlers/authHandler";
-import { handler as investmentsHandler } from "../src/handlers/investmentsHandler";
+import { requireSeedPassword } from "./devSecrets";
 
-const TARGET_EMAIL = "heavy@teste.com";
-const TARGET_PASSWORD = "Senha123!";
+process.env.IS_OFFLINE = "true";
+process.env.DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT || "http://localhost:8000";
+process.env.JWT_SECRET = process.env.JWT_SECRET || "load-test-only-secret";
+
+const TARGET_EMAIL = process.env.DEV_HEAVY_EMAIL || "heavy@teste.com";
+const TARGET_PASSWORD = requireSeedPassword();
 const TEST_DURATION_MS = 15000;
 const REQUESTS_PER_SECOND = 50;
 
@@ -22,22 +25,27 @@ function createEvent(method: string, path: string, body?: unknown, headers: Reco
   } as any;
 }
 
-async function login() {
-  const response = await authHandler(createEvent("POST", "/api/auth/login", { email: TARGET_EMAIL, password: TARGET_PASSWORD }));
-  if (response.statusCode !== 200) {
-    throw new Error(`Login failed: ${response.statusCode} ${response.body}`);
-  }
-
-  const rawCookie = response.headers?.["Set-Cookie"] || response.headers?.["set-cookie"] || "";
-  const cookie = String(rawCookie);
-  if (!cookie) {
-    throw new Error("Login did not return an auth cookie.");
-  }
-
-  return cookie;
-}
-
 async function run() {
+  const [{ handler: authHandler }, { handler: investmentsHandler }] = await Promise.all([
+    import("../src/handlers/authHandler"),
+    import("../src/handlers/investmentsHandler"),
+  ]);
+
+  async function login() {
+    const response = await authHandler(createEvent("POST", "/api/auth/login", { email: TARGET_EMAIL, password: TARGET_PASSWORD }));
+    if (response.statusCode !== 200) {
+      throw new Error(`Login failed: ${response.statusCode} ${response.body}`);
+    }
+
+    const rawCookie = response.headers?.["Set-Cookie"] || response.headers?.["set-cookie"] || "";
+    const cookie = String(rawCookie);
+    if (!cookie) {
+      throw new Error("Login did not return an auth cookie.");
+    }
+
+    return cookie;
+  }
+
   console.log("Starting direct-handler load test...");
   const cookie = await login();
   console.log(`Heavy user authenticated: ${TARGET_EMAIL}`);
@@ -68,7 +76,7 @@ async function run() {
       } else {
         errorCount += 1;
       }
-    } catch (error) {
+    } catch {
       errorCount += 1;
     } finally {
       latencies.push(Date.now() - requestStart);

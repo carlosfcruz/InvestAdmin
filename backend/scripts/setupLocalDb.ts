@@ -1,16 +1,10 @@
 import { CreateTableCommand, DynamoDBClient } from '@aws-sdk/client-dynamodb';
 
-const isOffline = process.env.IS_OFFLINE !== 'false';
-
-const clientProps = isOffline
-    ? {
-        region: 'localhost',
-        endpoint: 'http://localhost:8000',
-        credentials: { accessKeyId: 'MockAccessKeyId', secretAccessKey: 'MockSecretAccessKey' },
-    }
-    : {
-        region: process.env.AWS_REGION || 'us-east-1',
-    };
+const clientProps = {
+    region: 'localhost',
+    endpoint: process.env.DYNAMODB_ENDPOINT || 'http://localhost:8000',
+    credentials: { accessKeyId: 'MockAccessKeyId', secretAccessKey: 'MockSecretAccessKey' },
+};
 
 const client = new DynamoDBClient(clientProps);
 

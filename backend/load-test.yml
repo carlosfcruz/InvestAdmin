@@ -19,8 +19,8 @@ scenarios:
       - post:
           url: '/api/auth/login'
           json:
-            email: 'heavy@teste.com'
-            password: 'Senha123!'
+            email: '{{ $env.DEV_HEAVY_EMAIL }}'
+            password: '{{ $env.DEV_SEED_PASSWORD }}'
           capture:
             - header: 'set-cookie'
               as: 'cookieStr'
