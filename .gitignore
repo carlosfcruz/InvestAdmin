@@ -1,6 +1,8 @@
 # Local dev infrastructure
 .docker/dynamodb/
 .playwright-cli/
+backend/.dev-jwt-secret
+backend/.dev-seed-password
 
 # Local assistant/planning artifacts
 .agents/
@@ -15,6 +17,7 @@ coverage/
 # Test and browser artifacts
 **/playwright-report/
 **/test-results/
+frontend/.vite/
 *.tmp
 
 # Local env files
@@ -35,6 +38,18 @@ backend/test-*.js
 backend/test-*.d.ts
 backend/test-*.d.ts.map
 backend/test-*.js.map
+backend/scripts/*.js
+backend/scripts/*.d.ts
+backend/scripts/*.d.ts.map
+backend/scripts/*.js.map
+backend/scripts/test-*.ts
+backend/scripts/test-*.js
+backend/scripts/test-*.d.ts
+backend/scripts/test-*.d.ts.map
+backend/scripts/test-*.js.map
+backend/src/debug-*.ts
+backend/src/clear-selic.ts
+backend/src/audit_tests.ts
 
 # Editor/OS
 .idea/
