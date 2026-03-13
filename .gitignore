@@ -1,0 +1,44 @@
+# Local dev infrastructure
+.docker/dynamodb/
+.playwright-cli/
+
+# Local assistant/planning artifacts
+.agents/
+brain/
+
+# Dependencies and build output
+**/node_modules/
+**/dist/
+**/dist-ssr/
+coverage/
+
+# Test and browser artifacts
+**/playwright-report/
+**/test-results/
+*.tmp
+
+# Local env files
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs
+*.log
+backend/*.err.log
+backend/*runtime.log
+frontend/*runtime.log
+
+# Generated/local backend scratch files
+backend/test-*.ts
+backend/test-*.js
+backend/test-*.d.ts
+backend/test-*.d.ts.map
+backend/test-*.js.map
+
+# Editor/OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
