@@ -20,6 +20,7 @@ coverage/
 # Test and browser artifacts
 **/playwright-report/
 **/test-results/
+frontend/output/
 frontend/.vite/
 *.tmp
 

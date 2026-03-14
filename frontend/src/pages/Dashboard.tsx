@@ -1512,13 +1512,32 @@ export function Dashboard() {
                                 <>
                                     <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 grid grid-cols-1 sm:grid-cols-3 gap-4">
                                         <div className="min-w-0">
-                                            <p className={summaryMetaLabelClass}>Carteira RF</p>
+                                            <div className="flex items-center gap-2">
+                                                <p className={summaryMetaLabelClass}>Carteira RF</p>
+                                                <InfoPopover
+                                                    tooltipId="summary-benchmark-portfolio"
+                                                    title="Carteira RF"
+                                                    description="Rentabilidade acumulada em TWR da parcela elegível de renda fixa da carteira no período analisado."
+                                                    activeTooltip={activeTooltip}
+                                                    onToggle={setActiveTooltip}
+                                                    align="left"
+                                                />
+                                            </div>
                                             <p className={summaryMetaValueClass}>
                                                 {(fixedIncomeBenchmark.portfolioReturnPct * 100).toFixed(2)}%
                                             </p>
                                         </div>
                                         <div className="min-w-0">
-                                            <p className={summaryMetaLabelClass}>CDI</p>
+                                            <div className="flex items-center gap-2">
+                                                <p className={summaryMetaLabelClass}>CDI</p>
+                                                <InfoPopover
+                                                    tooltipId="summary-benchmark-cdi"
+                                                    title="CDI"
+                                                    description="Rentabilidade acumulada do CDI no mesmo período usado na comparação da carteira, servindo como benchmark de referência."
+                                                    activeTooltip={activeTooltip}
+                                                    onToggle={setActiveTooltip}
+                                                />
+                                            </div>
                                             <p className={summaryMetaValueClass}>
                                                 {(fixedIncomeBenchmark.benchmarkReturnPct * 100).toFixed(2)}%
                                             </p>
